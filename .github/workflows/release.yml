@@ -1,0 +1,47 @@
+name: release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel + sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --outdir dist
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: capsule-dist
+          path: dist/*
+
+  # Optional: publish to PyPI via trusted publishing. Enable by configuring a
+  # PyPI trusted publisher for this repo, then this job attaches on tag.
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ false }}  # flip to true once a PyPI trusted publisher is configured
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --upgrade pip build
+          python -m build --outdir dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

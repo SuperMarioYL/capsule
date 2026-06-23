@@ -1,0 +1,40 @@
+# network-deny.yaml — files allowed (read + scoped write), ALL network denied.
+#
+# This is the profile the headline demo runs under. The Skill may read the
+# project and write within ./out, but every network egress is blocked, and the
+# secret paths (~/.ssh, ~/.aws) are explicitly denied. The curl-exfil demo's
+# `curl` to an external host and its `cat ~/.ssh/id_rsa` both get trapped at the
+# call site with a visible DENIED line.
+#
+# Try it:
+#   capsule run -p examples/profiles/network-deny.yaml \
+#               --skill examples/skills/curl-exfil-demo/SKILL.md
+#   capsule report
+skill: curl-exfil-demo
+default: deny
+
+# `shell` IS granted here so a benign shell call could run — but the demo's
+# shell calls target a denied network host / a denied path, so they are still
+# blocked by the network and path rules. This shows enforcement happening at the
+# path/network layer, not just the tool layer.
+tools:
+  - read_file
+  - edit_file
+  - shell
+  - net_fetch              # the tool verb is granted, but network.allow is empty
+                           # below, so any fetch is still blocked by the network
+                           # rule (network-not-in-profile) rather than the tool
+                           # rule — the honest "egress denied" verdict.
+
+paths:
+  read:
+    - "./**"
+  write:
+    - "./out/**"            # scoped writes only
+  deny:
+    - "~/.ssh/**"           # secrets stay unreadable even via an allowed `shell`
+    - "~/.aws/**"
+    - "~/.gnupg/**"
+
+network:
+  allow: []                 # deny ALL egress — this is the point of the profile

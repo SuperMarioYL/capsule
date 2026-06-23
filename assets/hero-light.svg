@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300"
+     font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif"
+     role="img" aria-label="Capsule — a seccomp-style runtime capability sandbox for installable agent Skills">
+  <defs>
+    <linearGradient id="cap-h-l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E0245E"/>
+      <stop offset="1" stop-color="#F5A623"/>
+    </linearGradient>
+    <marker id="hb-l" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#E0245E"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="880" height="300" fill="#F5F5F7"/>
+
+  <!-- capsule glyph: a pill split into allow (green) / deny (red) halves -->
+  <g transform="translate(64,96)">
+    <rect x="0" y="0" width="120" height="108" rx="54" fill="#10A37F" fill-opacity="0.12"/>
+    <clipPath id="cap-pill-l"><rect x="0" y="0" width="120" height="108" rx="54"/></clipPath>
+    <rect x="60" y="0" width="60" height="108" fill="#E0245E" fill-opacity="0.12" clip-path="url(#cap-pill-l)"/>
+    <rect x="0" y="0" width="120" height="108" rx="54" fill="none" stroke="#6E6E73" stroke-width="2"/>
+    <line x1="60" y1="6" x2="60" y2="102" stroke="#C9C9D0" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <text x="30" y="60" text-anchor="middle" font-size="22" font-weight="700" fill="#0B6B53">✓</text>
+    <text x="90" y="60" text-anchor="middle" font-size="22" font-weight="700" fill="#B01545">✗</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="232" y="120" font-size="58" font-weight="800" fill="#1D1D1F" letter-spacing="-1.5">Capsule</text>
+  <text x="234" y="160" font-size="19" font-weight="600" fill="url(#cap-h-l)">seccomp-style runtime sandbox for installable agent Skills</text>
+  <text x="234" y="192" font-size="15" font-weight="500" fill="#6E6E73">Every tool, path &amp; network call a Skill makes is trapped at the call site — deny-by-default.</text>
+
+  <!-- mini call-site flow -->
+  <g transform="translate(234,214)">
+    <rect x="0" y="0" width="150" height="40" rx="12" fill="#5E5CE6" fill-opacity="0.10" stroke="#5E5CE6" stroke-width="1.5"/>
+    <text x="75" y="25" text-anchor="middle" font-size="12.5" font-weight="600" fill="#4B3FC4">Skill tool call</text>
+    <line x1="150" y1="20" x2="196" y2="20" stroke="#C9C9D0" stroke-width="1.5" marker-end="url(#hb-l)"/>
+    <rect x="200" y="0" width="150" height="40" rx="12" fill="#0071E3" fill-opacity="0.10" stroke="#0071E3" stroke-width="1.5"/>
+    <text x="275" y="25" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0A4F9E">capability profile</text>
+    <line x1="350" y1="20" x2="396" y2="20" stroke="#C9C9D0" stroke-width="1.5" marker-end="url(#hb-l)"/>
+    <rect x="400" y="0" width="150" height="40" rx="12" fill="#E0245E" fill-opacity="0.12" stroke="#E0245E" stroke-width="1.5"/>
+    <text x="475" y="25" text-anchor="middle" font-size="12.5" font-weight="700" fill="#B01545">DENIED at call site</text>
+  </g>
+</svg>

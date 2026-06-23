@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capsule"
+version = "0.1.0"
+description = "A seccomp-style runtime capability sandbox for installable agent Skills — traps each Skill's tool, path, and network calls at the call site."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "SuperMarioYL" }]
+keywords = ["agent", "skill", "sandbox", "capability", "seccomp", "claude-code", "codex-cli", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "rich>=13.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/SuperMarioYL/capsule"
+Repository = "https://github.com/SuperMarioYL/capsule"
+Issues = "https://github.com/SuperMarioYL/capsule/issues"
+
+[project.scripts]
+capsule = "capsule.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["capsule*"]

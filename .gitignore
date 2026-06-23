@@ -1,0 +1,25 @@
+# runtime trap log
+.capsule/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+
+# editor/agent local files
+.claude/
+CLAUDE.md
+
+# build scratch
+PUBLISH_BLOCKED.md
+BUILD_SETUP_NEXT_STEPS.md
+.spawn.*
+.builder_*
+.build_metadata*
+.stage_*
+DRIFT_REPORT.md
+GIT_AUTHOR_DRIFT.md

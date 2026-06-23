@@ -1,0 +1,31 @@
+# readonly.yaml — a permissive-read, no-write, no-network capability profile.
+#
+# A Skill bound to this profile may read files under the current project but may
+# NOT write anything, may NOT run shell commands, and has NO network egress.
+# Reading secrets is still blocked: ~/.ssh and ~/.aws are on the deny list and a
+# deny always beats a read allowance.
+#
+# Try it:
+#   capsule check  -p examples/profiles/readonly.yaml
+#   capsule run    -p examples/profiles/readonly.yaml \
+#                  --skill examples/skills/curl-exfil-demo/SKILL.md
+skill: curl-exfil-demo      # which Skill this profile binds (matches the demo)
+default: deny               # deny-by-default — the only supported stance in v0.1
+
+# Canonical, host-agnostic tool verbs the Skill may invoke. `shell` and
+# `edit_file` are deliberately absent, so a `curl`/`cat` shell call is denied
+# outright before paths or network are even considered.
+tools:
+  - read_file
+
+paths:
+  read:
+    - "./**"                # anything under the project directory
+  write: []                 # no writes at all
+  deny:
+    - "~/.ssh/**"           # never readable, even though read_file is allowed
+    - "~/.aws/**"
+    - "~/.config/**"
+
+network:
+  allow: []                 # empty = no egress whatsoever
