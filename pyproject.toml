@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "A seccomp-style runtime capability sandbox for installable agent Skills — traps each Skill's tool, path, and network calls at the call site."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "SuperMarioYL" }]
 keywords = ["agent", "skill", "sandbox", "capability", "seccomp", "claude-code", "codex-cli", "security"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.12",
     "Topic :: Security",
 ]
