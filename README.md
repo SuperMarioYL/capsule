@@ -11,7 +11,7 @@
 <p align="center"><sub>seccomp 式的运行时能力沙箱：在调用点逐次拦截每个 Skill 的工具、路径与网络调用。</sub></p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="license"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-black" alt="license"></a>
   <img src="https://img.shields.io/github/v/release/SuperMarioYL/capsule" alt="latest release">
   <a href="https://github.com/SuperMarioYL/capsule/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/SuperMarioYL/capsule/ci.yml?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.12%2B-3776AB" alt="python">
