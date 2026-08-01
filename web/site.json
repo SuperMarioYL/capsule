@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "name": "capsule",
+  "github": "https://github.com/SuperMarioYL/capsule",
+  "host": "capsule.lei6393.com",
+  "lang": { "primary": "zh", "toggle": true },
+  "accent": ["#e6a144", "#c98a3a", "#9c6a2c"],
+  "hero": {
+    "eyebrow": {
+      "zh": "调用点拦截 · 拒绝默认 · 本地零依赖",
+      "en": "Call-site enforcement · Deny-by-default · Local, zero-dependency"
+    },
+    "headline": {
+      "zh": "装进 Agent 的每个 Skill\n都被拦在越界的那一步",
+      "en": "Every Skill you install\nstops at the call it shouldn't make"
+    },
+    "sub": {
+      "zh": "Capsule 在工具调用的那一刻就拦下越界的工具、路径与网络请求——不是装载前的君子协定，也不是事后的审计日志。",
+      "en": "Capsule traps out-of-bound tool, path, and network calls the moment they happen — not a load-time promise, not an after-the-fact audit."
+    },
+    "command": "capsule run -p readonly.yaml -- claude",
+    "cta": { "zh": "开始拦截", "en": "Start trapping" },
+    "ctaGithub": { "zh": "GitHub", "en": "GitHub" },
+    "scroll": { "zh": "看它能拦什么", "en": "See what it blocks" }
+  },
+  "advantages": [
+    {
+      "title": {
+        "zh": "在调用点当场拦下，不是事后记账",
+        "en": "Blocked at the call site, not after the fact"
+      },
+      "body": {
+        "zh": "技能试图 curl 外发、读取 ~/.ssh，Capsule 在那一刻拒绝并打印 DENIED——越界的调用根本不会执行。",
+        "en": "A skill tries to curl out or read ~/.ssh; Capsule refuses it on the spot with a DENIED line — the call never runs."
+      },
+      "chips": ["› curl 外发被拦", "› ~/.ssh 读取被拦", "› 网络出口默认全拒"]
+    },
+    {
+      "title": {
+        "zh": "一份声明式 profile 决定能碰什么",
+        "en": "One declarative profile decides what it may touch"
+      },
+      "body": {
+        "zh": "用一份 YAML 声明工具、路径读写与网络出口；不在声明里的，一律拒绝。",
+        "en": "Declare tools, path read/write, and network egress in one YAML — anything not declared is denied."
+      },
+      "chips": ["› deny-by-default", "› 路径读写分离", "› 网络白名单"]
+    },
+    {
+      "title": {
+        "zh": "一条命令复现真实拦截",
+        "en": "Reproduce a real block in one command"
+      },
+      "body": {
+        "zh": "自带的恶意 demo Skill 会尝试外发与读密钥；用 deny-by-default profile 跑一遍，五分钟内看到第一次拦截。",
+        "en": "A deliberately malicious demo skill tries to exfiltrate and read keys; run it under a deny-by-default profile and see your first block in under five minutes."
+      },
+      "chips": ["› capsule init", "› capsule run --skill", "› capsule report"]
+    },
+    {
+      "title": {
+        "zh": "拦截后立刻出报告",
+        "en": "A report right after the block"
+      },
+      "body": {
+        "zh": "每次运行的允许/拦截计数与触发规则，一条 capsule report 拉成表格。",
+        "en": "Allowed-vs-blocked counts and the rule that fired, as one capsule report table."
+      },
+      "chips": ["› allowed vs blocked", "› 命中规则可读", "› JSONL 可留存"]
+    }
+  ],
+  "scene": { "kind": "particle-field" },
+  "cta": {
+    "headline": {
+      "zh": "把不信任的 Skill 关进沙箱，再放出来跑",
+      "en": "Sandbox the skills you don't trust, then let them run"
+    },
+    "sub": {
+      "zh": "deny-by-default，本地引擎，开源。",
+      "en": "deny-by-default, local engine, open source."
+    },
+    "button": { "zh": "查看 GitHub", "en": "View on GitHub" }
+  },
+  "footer": {
+    "tag": {
+      "zh": "本地引擎 · 开源 · Apache-2.0",
+      "en": "Local engine · open source · Apache-2.0"
+    }
+  }
+}
