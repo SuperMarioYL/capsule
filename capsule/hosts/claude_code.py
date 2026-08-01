@@ -95,16 +95,46 @@ _NET_CMDS = {"curl", "wget", "http", "https", "nc", "ncat", "scp", "sftp", "ssh"
 
 _URL_RE = re.compile(r"""\b((?:https?|ftp)://[^\s'"]+)""", re.IGNORECASE)
 _HOSTISH_RE = re.compile(r"\b([a-z0-9.-]+\.[a-z]{2,})\b", re.IGNORECASE)
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def _is_ipv4(token: str) -> bool:
+    """True for a dotted-quad IPv4 literal whose every octet is in 0–255."""
+    if not _IPV4_RE.match(token):
+        return False
+    return all(0 <= int(octet) <= 255 for octet in token.split("."))
 
 
 def _extract_host(token: str) -> Optional[str]:
-    """Pull a bare hostname out of a URL or host:port token, if present."""
+    """Pull a bare hostname (or IPv4/IPv6 literal) out of a URL or host token.
+
+    Recognises a DNS name (``api.github.com``), an IPv4 literal (``1.2.3.4``),
+    and a bracketed IPv6 literal (``[::1]`` / ``[fe80::1]``). Leading-wildcard
+    subdomain *patterns* (``*.internal``) are NOT hosts and are left for the
+    policy engine's :func:`~capsule.policy.match_host` to handle.
+
+    Returns the host lower-cased, or ``None`` when the token is not a host.
+
+    Before v0.2 this only matched DNS names (the TLD had to be letters), so an
+    IPv4 host returned ``None`` — which let ``curl http://1.2.3.4`` slip past the
+    network rule under a profile that grants ``shell``. IPv4 and IPv6 are now
+    first-class hosts.
+    """
     token = token.strip().strip("'\"")
     if "://" in token:
         netloc = urlparse(token).netloc or urlparse(token).path
         token = netloc
-    # Strip user@ and :port
-    token = token.split("@")[-1].split("/")[0].split(":")[0]
+    # Strip user@ and /path (NOT :port yet — a bracketed IPv6 may carry one).
+    token = token.split("@")[-1].split("/")[0]
+    # Bracketed IPv6: netloc like "[::1]:8080" -> the bare "::1".
+    if token.startswith("["):
+        end = token.find("]")
+        if end != -1:
+            return token[1:end].lower()
+    # Now safe to strip :port (any bracketed IPv6 was handled above).
+    token = token.split(":")[0]
+    if _is_ipv4(token):
+        return token.lower()
     if _HOSTISH_RE.fullmatch(token):
         return token.lower()
     return None
@@ -131,8 +161,13 @@ def _parse_bash(command: str) -> CallRequest:
     url_match = _URL_RE.search(raw)
     if url_match:
         host = _extract_host(url_match.group(1))
-        if host:
-            return CallRequest(tool="shell", host=host, raw=raw)
+        # Fail-closed: a URL is ALWAYS a network-egress attempt. If we could not
+        # resolve a clean host (an obfuscated/unusual URL), still flag the call
+        # as network egress by carrying the raw URL token — the policy engine's
+        # network rule is then consulted and, against any sane deny-by-default
+        # allow-list, the call is DENIED rather than waved through as a bare
+        # ``shell`` call (which is what happened pre-v0.2 for IP-host URLs).
+        return CallRequest(tool="shell", host=host or url_match.group(1), raw=raw)
 
     try:
         tokens = shlex.split(raw)

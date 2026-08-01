@@ -161,3 +161,24 @@ def test_match_host_subdomain_wildcard():
 
 def test_match_host_is_case_insensitive():
     assert match_host("API.GitHub.com", "api.github.com")
+
+
+# --------------------------------------------------------------------------- #
+# m6 / BUG-2 — relative call paths resolve against the profile's base_dir
+# --------------------------------------------------------------------------- #
+def test_relative_call_path_matches_profile_base_dir(tmp_path, monkeypatch):
+    # A relative call path must resolve against the profile's base_dir, NOT the
+    # process cwd, so it matches a relative profile glob ("./**") even when the
+    # cwd differs from the profile's base_dir. Without this fix a relative call
+    # path is joined onto os.getcwd() and silently misses the profile's "./**".
+    elsewhere = tmp_path / "elsewhere"  # NOT the profile base_dir
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # make cwd != profile.base_dir
+
+    prof = make_profile(tmp_path)  # base_dir=tmp_path; read glob "./**" -> tmp_path/**
+    # A relative path under the project root — must be allowed once it resolves
+    # against the profile's base_dir.
+    call = CallRequest(tool="read_file", path="notes/secret.txt")
+    d = decide(prof, call)
+    assert d.allowed
+    assert d.rule == "allowed"

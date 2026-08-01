@@ -33,7 +33,7 @@ from rich.table import Table
 from rich.text import Text
 
 from capsule import __version__
-from capsule.hosts.claude_code import ClaudeCodeAdapter
+from capsule.hosts.registry import DEFAULT_HOST, get_adapter
 from capsule.interpose import CapabilityViolation, Interposer
 from capsule.policy import CallRequest
 from capsule.profile import Profile, ProfileError, load_profile_file
@@ -175,6 +175,104 @@ def check_cmd(profile_path: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# capsule init
+# --------------------------------------------------------------------------- #
+# Scaffold content written by `capsule init`. The profile is a real, valid,
+# deny-by-default capsule profile (not a stub) so a fresh user can immediately
+# `capsule run -p examples/profiles/readonly.yaml --skill <SKILL.md>`.
+_CAPSULE_YAML = """\
+# capsule.yaml — Capsule session config (scaffolded by `capsule init`).
+#
+# Edit `default_profile` to point at the capability profile your project runs
+# under by default. `trap_log` is where `capsule run` appends the JSONL trap log
+# that `capsule report` reads back.
+default_profile: examples/profiles/readonly.yaml
+trap_log: .capsule/trap.log
+"""
+
+_READONLY_YAML = """\
+# readonly.yaml — a permissive-read, no-write, no-network capability profile
+# scaffolded by `capsule init`. Edit `skill`, `tools`, `paths`, and `network`
+# to match the Skill and the surface you want to grant it. Deny-by-default.
+skill: my-skill              # the Skill name this profile binds (edit me)
+default: deny                # deny-by-default — the only supported stance
+
+# Canonical, host-agnostic tool verbs the Skill may invoke. `shell`,
+# `edit_file`, and `net_fetch` are deliberately absent, so a `curl`/`cat` shell
+# call is denied outright before paths or network are even considered.
+tools:
+  - read_file
+
+paths:
+  read:
+    - "./**"                 # anything under the project directory
+  write: []                  # no writes at all
+  deny:
+    - "~/.ssh/**"            # secrets stay unreadable even via an allowed read
+    - "~/.aws/**"
+    - "~/.config/**"
+
+network:
+  allow: []                  # empty = no egress whatsoever
+"""
+
+
+@cli.command("init")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite capsule.yaml / the example profile if they already exist.",
+)
+@click.argument(
+    "target_dir",
+    required=False,
+    default=".",
+    type=click.Path(file_okay=False),
+)
+def init_cmd(force: bool, target_dir: str) -> None:
+    """Scaffold capsule.yaml + an example readonly profile in TARGET_DIR.
+
+    Writes `capsule.yaml` and `examples/profiles/readonly.yaml` into TARGET_DIR
+    (the current directory by default). Refuses to clobber an existing file
+    unless `--force` is given — a profile is a security-relevant document, so a
+    silent overwrite of a user's hand-tuned profile would be a fail-open smell.
+
+    Exit code 0 on success, 2 if a target file already exists (and `--force`
+    was not passed).
+    """
+    target = Path(target_dir).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+
+    config_path = target / "capsule.yaml"
+    profile_dir = target / "examples" / "profiles"
+    profile_path = profile_dir / "readonly.yaml"
+
+    blocked: list[Path] = []
+    if config_path.exists() and not force:
+        blocked.append(config_path)
+    if profile_path.exists() and not force:
+        blocked.append(profile_path)
+    if blocked:
+        for p in blocked:
+            _err.print(
+                f"[yellow]exists (pass --force to overwrite):[/] {p}"
+            )
+        raise SystemExit(2)
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_CAPSULE_YAML, encoding="utf-8")
+    profile_path.write_text(_READONLY_YAML, encoding="utf-8")
+
+    _out.print(f"[green]✓ scaffolded[/] in [bold]{target}[/]")
+    _out.print(f"  - {config_path.relative_to(target) if target in config_path.parents else config_path}")
+    _out.print(f"  - {profile_path.relative_to(target) if target in profile_path.parents else profile_path}")
+    _out.print(
+        "\nNext: edit [bold]capsule.yaml[/], then "
+        "[bold]capsule run -p examples/profiles/readonly.yaml --skill <SKILL.md>[/]"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # capsule run
 # --------------------------------------------------------------------------- #
 @cli.command(
@@ -210,12 +308,21 @@ def check_cmd(profile_path: str) -> None:
     default=True,
     help="Also print a line for allowed calls (on by default in a demo run).",
 )
+@click.option(
+    "--host",
+    "host_name",
+    default=DEFAULT_HOST,
+    show_default=True,
+    help="Host adapter to enforce through (default claude-code). A future "
+         "Codex/Cursor adapter is one registered factory; unknown values error.",
+)
 @click.argument("host_cmd", nargs=-1, type=click.UNPROCESSED)
 def run_cmd(
     profile_path: str,
     skill_md: Optional[str],
     log_path: Optional[str],
     show_allowed: bool,
+    host_name: str,
     host_cmd: tuple[str, ...],
 ) -> None:
     """Start a guarded session under a capability profile.
@@ -239,7 +346,7 @@ def run_cmd(
     )
 
     if skill_md:
-        _run_skill_replay(interposer, profile, skill_md)
+        _run_skill_replay(interposer, profile, skill_md, host_name)
         return
 
     if not host_cmd:
@@ -249,10 +356,12 @@ def run_cmd(
         )
         raise SystemExit(2)
 
-    _run_live_host(interposer, profile, list(host_cmd))
+    _run_live_host(interposer, profile, list(host_cmd), host_name)
 
 
-def _run_skill_replay(interposer: Interposer, profile: Profile, skill_md_path: str) -> None:
+def _run_skill_replay(
+    interposer: Interposer, profile: Profile, skill_md_path: str, host_name: str
+) -> None:
     """Replay a SKILL.md's declared tool calls through the enforcement path."""
     md_path = Path(skill_md_path)
     if not md_path.is_file():
@@ -263,11 +372,17 @@ def _run_skill_replay(interposer: Interposer, profile: Profile, skill_md_path: s
     skill = _skill_name(text, fallback=md_path.parent.name)
     calls = _parse_skill_calls(text)
 
-    adapter = ClaudeCodeAdapter(interposer, skill=skill)
+    try:
+        adapter = get_adapter(host_name, interposer, skill=skill)
+    except ValueError as exc:
+        _err.print(f"[bold red]host error:[/] {exc}")
+        raise SystemExit(2)
+
     _err.print(
         Panel.fit(
             f"running skill [bold]{skill}[/] under profile [bold]{profile.skill}[/]\n"
-            f"[dim]{len(calls)} declared tool call(s) — deny-by-default[/]",
+            f"[dim]host: {adapter.host} · {len(calls)} declared tool call(s) — "
+            f"deny-by-default[/]",
             border_style="cyan",
         )
     )
@@ -295,27 +410,38 @@ def _run_skill_replay(interposer: Interposer, profile: Profile, skill_md_path: s
     raise SystemExit(1 if blocked else 0)
 
 
-def _run_live_host(interposer: Interposer, profile: Profile, host_cmd: list[str]) -> None:
+def _run_live_host(
+    interposer: Interposer, profile: Profile, host_cmd: list[str], host_name: str
+) -> None:
     """Wrap a live host launch — document + open the call-site chokepoint.
 
     v0.1 ships the Claude Code adapter as the integration seam: a host routes
-    each tool call through :class:`ClaudeCodeAdapter`. Because attaching to a
-    live, already-running agent's internal tool dispatch is host-version
-    specific (and out of scope for v0.1's single-process engine), ``run`` here
-    launches the command and points the operator at the seam to wire. The
-    *enforcement* is fully real and unit-tested; this branch is the honest
-    boundary of what the local engine does without a host plugin installed.
+    each tool call through its adapter. Because attaching to a live,
+    already-running agent's internal tool dispatch is host-version specific (and
+    out of scope for v0.1/v0.2's single-process engine), ``run`` here launches
+    the command and points the operator at the seam to wire. The *enforcement*
+    is fully real and unit-tested; this branch is the honest boundary of what
+    the local engine does without a host plugin installed.
     """
     import shutil
     import subprocess
+
+    # Validate the host name up front so a typo errors before launching anything.
+    try:
+        adapter = get_adapter(host_name, interposer)
+    except ValueError as exc:
+        _err.print(f"[bold red]host error:[/] {exc}")
+        raise SystemExit(2)
 
     exe = host_cmd[0]
     _err.print(
         Panel.fit(
             f"profile [bold]{profile.skill}[/] active — deny-by-default\n"
+            f"host adapter: [bold]{adapter.host}[/] (seam: "
+            f"capsule.hosts.{adapter.host.replace('-', '_')})\n"
             f"launching host: [bold]{' '.join(host_cmd)}[/]\n\n"
             "[dim]Wire enforcement by routing the host's tool dispatch through\n"
-            "capsule.hosts.claude_code.ClaudeCodeAdapter.guard_tool_use().\n"
+            "the registered adapter's guard_tool_use().\n"
             "For an offline, reproducible block, use:  capsule run -p <profile> "
             "--skill <SKILL.md>[/]",
             border_style="cyan",

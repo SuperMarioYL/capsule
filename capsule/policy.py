@@ -131,22 +131,32 @@ class Decision:
 # --------------------------------------------------------------------------- #
 # Matching helpers (lexical; profile globs are pre-normalised)
 # --------------------------------------------------------------------------- #
-def _normalise_call_path(path: str) -> str:
+def _normalise_call_path(path: str, base_dir: Optional[str] = None) -> str:
     """Normalise a call's target path the same way profile globs were.
 
-    ``~`` is expanded and relative paths are anchored on the current working
-    directory, then collapsed lexically. This mirrors
+    ``~`` is expanded and relative paths are anchored on ``base_dir`` (falling
+    back to the current working directory only when no ``base_dir`` is given),
+    then collapsed lexically. This mirrors
     :func:`capsule.profile._normalise_glob` so a profile glob and a call path
     are compared in the same coordinate system.
+
+    Before v0.2 ``base_dir`` was always ``os.getcwd()``, which meant a relative
+    call path (``./foo``) was joined onto the *process* cwd while the matching
+    profile glob had been joined onto the *profile's* ``base_dir`` — so the two
+    only lined up when the caller happened to run from the profile's directory.
+    :func:`decide` now passes the active profile's ``base_dir`` through so
+    relative call paths resolve in the profile's coordinate system regardless
+    of cwd.
     """
     if path.startswith("~"):
         path = os.path.expanduser(path)
     elif not os.path.isabs(path):
-        path = os.path.join(os.getcwd(), path)
+        root = base_dir if base_dir is not None else os.getcwd()
+        path = os.path.join(root, path)
     return os.path.normpath(path)
 
 
-def match_path(path: str, pattern: str) -> bool:
+def match_path(path: str, pattern: str, *, base_dir: Optional[str] = None) -> bool:
     """Return whether ``path`` matches glob ``pattern``, honouring ``**``.
 
     ``fnmatch`` treats ``*`` as "anything except the path separator-ish" but is
@@ -158,8 +168,11 @@ def match_path(path: str, pattern: str) -> bool:
 
     Both ``path`` and ``pattern`` are expected to be normalised absolute strings
     (the profile pre-normalises its globs; we normalise the call path above).
+
+    ``base_dir`` anchors relative ``path`` values against the profile's
+    coordinate system (see :func:`_normalise_call_path`).
     """
-    path = _normalise_call_path(path)
+    path = _normalise_call_path(path, base_dir)
 
     # Exact (non-glob) pattern: direct comparison or prefix-dir containment.
     if "*" not in pattern and "?" not in pattern and "[" not in pattern:
@@ -198,9 +211,9 @@ def match_path(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(path, pattern)
 
 
-def _first_match(path: str, patterns) -> Optional[str]:
+def _first_match(path: str, patterns, *, base_dir: Optional[str] = None) -> Optional[str]:
     for pat in patterns:
-        if match_path(path, pat):
+        if match_path(path, pat, base_dir=base_dir):
             return pat
     return None
 
@@ -240,7 +253,8 @@ def decide(profile: Profile, call: CallRequest) -> Decision:
 
     # 2) Explicit path denials trump everything — even an otherwise-allowed read.
     if call.path is not None:
-        denied = _first_match(call.path, profile.paths.deny)
+        base = str(profile.base_dir)
+        denied = _first_match(call.path, profile.paths.deny, base_dir=base)
         if denied is not None:
             return Decision(
                 effect=Effect.DENY,
@@ -253,7 +267,7 @@ def decide(profile: Profile, call: CallRequest) -> Decision:
         allow_globs = (
             profile.paths.write if call.access == "write" else profile.paths.read
         )
-        matched = _first_match(call.path, allow_globs)
+        matched = _first_match(call.path, allow_globs, base_dir=base)
         if matched is None:
             return Decision(
                 effect=Effect.DENY,
