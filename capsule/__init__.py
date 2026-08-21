@@ -5,4 +5,4 @@ Capsule traps every tool call at the call site and blocks (and logs) any call
 that falls outside the declared capability profile. Deny-by-default.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

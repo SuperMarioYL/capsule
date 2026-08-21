@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -160,6 +160,22 @@ class TrapLog:
     def open(cls, path: str | os.PathLike[str] | None = None) -> "TrapLog":
         """Create a log writing to ``path`` (default ``./.capsule/trap.log``)."""
         return cls(path if path is not None else default_log_path())
+
+    @classmethod
+    def fresh(cls, path: str | os.PathLike[str] | None = None) -> "TrapLog":
+        """Create a log truncated to empty at ``path`` (fresh for this run).
+
+        ``capsule run`` uses this for the default ``./.capsule/trap.log`` so a
+        later ``capsule report`` reflects the latest run rather than every run
+        ever appended to the file. An explicit ``--log <path>`` keeps the
+        append behaviour via :meth:`open` (preserving audit retention).
+        """
+        log = cls(path if path is not None else default_log_path())
+        if log.path is not None:
+            log.path.parent.mkdir(parents=True, exist_ok=True)
+            # Truncate any prior content so report reads only this run.
+            log.path.write_text("", encoding="utf-8")
+        return log
 
     @classmethod
     def in_memory(cls) -> "TrapLog":

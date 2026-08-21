@@ -11,7 +11,7 @@
 <p align="center"><sub>The seccomp-style runtime sandbox that traps each Skill's tool, path, and network calls — at the call site.</sub></p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="license"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-black" alt="license"></a>
   <img src="https://img.shields.io/github/v/release/SuperMarioYL/capsule" alt="latest release">
   <a href="https://github.com/SuperMarioYL/capsule/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/SuperMarioYL/capsule/ci.yml?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.12%2B-3776AB" alt="python">
@@ -187,7 +187,7 @@ Shape: self-hosted free + hosted paid, per-seat (early estimate ~$15–25 / engi
 
 ## License
 
-[MIT](./LICENSE). File a feature request or bug in [Issues](https://github.com/SuperMarioYL/capsule/issues); PRs welcome.
+[Apache-2.0](./LICENSE). File a feature request or bug in [Issues](https://github.com/SuperMarioYL/capsule/issues); PRs welcome.
 
 ## Share this
 
@@ -197,4 +197,4 @@ It blocks the disallowed call at the call site, not in an after-the-fact audit.
 https://github.com/SuperMarioYL/capsule
 ```
 
-<p align="center"><sub><a href="./LICENSE">MIT</a> © 2026 SuperMarioYL</sub></p>
+<p align="center"><sub><a href="./LICENSE">Apache-2.0</a> © 2026 SuperMarioYL</sub></p>

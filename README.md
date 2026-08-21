@@ -187,7 +187,7 @@ network:
 
 ## 许可
 
-[MIT](./LICENSE)。欢迎在 [Issues](https://github.com/SuperMarioYL/capsule/issues) 提需求或 bug，PR 同样欢迎。
+[Apache-2.0](./LICENSE)。欢迎在 [Issues](https://github.com/SuperMarioYL/capsule/issues) 提需求或 bug，PR 同样欢迎。
 
 ## Share this
 
@@ -197,4 +197,4 @@ It blocks the disallowed call at the call site, not in an after-the-fact audit.
 https://github.com/SuperMarioYL/capsule
 ```
 
-<p align="center"><sub><a href="./LICENSE">MIT</a> © 2026 SuperMarioYL</sub></p>
+<p align="center"><sub><a href="./LICENSE">Apache-2.0</a> © 2026 SuperMarioYL</sub></p>

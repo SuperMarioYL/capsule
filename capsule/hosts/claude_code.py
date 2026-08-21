@@ -49,7 +49,7 @@ import shlex
 from typing import Any, Callable, Mapping, Optional, TypeVar
 from urllib.parse import urlparse
 
-from capsule.interpose import CapabilityViolation, Interposer
+from capsule.interpose import Interposer
 from capsule.policy import CallRequest, Decision
 
 __all__ = [
@@ -140,6 +140,26 @@ def _extract_host(token: str) -> Optional[str]:
     return None
 
 
+def _file_url_path(url: str) -> Optional[str]:
+    """Local path a ``file:`` URL targets, or ``None`` for a non-file URL.
+
+    ``urlparse('file://~/.ssh/id_rsa')`` splits the leading ``~`` into
+    ``netloc`` and ``/.ssh/id_rsa`` into ``path`` (the ``//`` introduces an
+    authority). We re-attach a netloc that is not a real host (``~``) so the
+    path survives as ``~/.ssh/id_rsa`` and the policy engine's ``~``
+    expansion lines up with a profile's ``~/.ssh/**`` deny glob. A standard
+    ``file:///etc/passwd`` (empty authority) yields ``/etc/passwd`` unchanged.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "file":
+        return None
+    netloc, path = parsed.netloc, parsed.path
+    if netloc and not _extract_host(netloc):
+        # The authority is not a host (e.g. '~') — treat it as a path segment.
+        return f"{netloc}{path}" if path else netloc
+    return path or None
+
+
 def _parse_bash(command: str) -> CallRequest:
     """Reduce a shell command line to a :class:`CallRequest`, fail-closed.
 
@@ -186,6 +206,12 @@ def _parse_bash(command: str) -> CallRequest:
             host = _extract_host(a)
             if host:
                 return CallRequest(tool="shell", host=host, raw=raw)
+            # A file:// argument targets a local path — surface it so a path
+            # deny rule (~/.ssh/**) fires with path-denied instead of the call
+            # falling through to a bare, host-less shell allow.
+            file_path = _file_url_path(a)
+            if file_path is not None:
+                return CallRequest(tool="shell", path=file_path, access="read", raw=raw)
         # A network command with no resolvable host is still suspicious.
         return CallRequest(tool="shell", raw=raw)
 
@@ -232,7 +258,24 @@ def to_call_request(
     if verb == "net_fetch":
         url = str(data.get("url", "")).strip()
         host = _extract_host(url) if url else None
-        return CallRequest(tool=verb, host=host, raw=url or tool_name)
+        # Fail-closed: a non-empty URL whose host we could not resolve
+        # (file://, a malformed/trailing-dot host, etc.) still consults the
+        # network rule (DENY under a deny-by-default allow-list) rather than
+        # waving through as a host-less net_fetch. Mirrors the m4 fail-closed
+        # in _parse_bash (host = host or url_token).
+        if host is None and url:
+            host = url
+        # A file:// URL targets a local path — surface it so a path deny rule
+        # (~/.ssh/**) fires with path-denied, and the call never falls through
+        # to a bare net_fetch with no host AND no path.
+        path = _file_url_path(url)
+        return CallRequest(
+            tool=verb,
+            host=host,
+            path=path,
+            access="read",
+            raw=url or tool_name,
+        )
 
     # Filesystem tools carry a path under one of several keys.
     path = (

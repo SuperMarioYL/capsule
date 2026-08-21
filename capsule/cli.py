@@ -35,7 +35,6 @@ from rich.text import Text
 from capsule import __version__
 from capsule.hosts.registry import DEFAULT_HOST, get_adapter
 from capsule.interpose import CapabilityViolation, Interposer
-from capsule.policy import CallRequest
 from capsule.profile import Profile, ProfileError, load_profile_file
 from capsule.trap import TrapLog, default_log_path
 
@@ -340,7 +339,14 @@ def run_cmd(
       enforcement seam itself is :mod:`capsule.hosts.claude_code`.
     """
     profile = _load_or_die(profile_path, anchor_to_cwd=True)
-    log = TrapLog.open(Path(log_path) if log_path else default_log_path())
+    # The DEFAULT log is fresh per run so `capsule report` reflects the latest
+    # run, not cumulative history across runs. An explicit `--log <path>`
+    # preserves the append behaviour (audit retention) — only the implicit
+    # default log is truncated.
+    if log_path:
+        log = TrapLog.open(Path(log_path))
+    else:
+        log = TrapLog.fresh(default_log_path())
     interposer = Interposer(
         profile, trap_log=log, emit=_emit_rich, emit_allowed=show_allowed
     )

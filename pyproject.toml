@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capsule"
-version = "0.2.0"
+version = "0.3.0"
 description = "A seccomp-style runtime capability sandbox for installable agent Skills — traps each Skill's tool, path, and network calls at the call site."
 readme = "README.md"
 requires-python = ">=3.12"

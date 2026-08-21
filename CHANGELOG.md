@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-21
+
+### Fixed
+- **file:// URL bypasses the ~/.ssh deny**: a `file://` URL reduced to a
+  host-less, path-less call so only the tool-allow check ran — under
+  `network-deny.yaml` (which grants `shell` + `net_fetch`) it was ALLOWED,
+  defeating the `~/.ssh/**` path deny and the deny-by-default network stance.
+  `file://` is now fail-closed like `http`/`https`: its local path is surfaced
+  (so a `~/.ssh/**` deny fires with `path-denied`) and any no-host URL still
+  consults the network rule.
+- **trap log accumulates across runs**: `capsule run` opened the default
+  `.capsule/trap.log` without truncating, so `capsule report` read cumulative
+  counts across every run ever written, diverging from the run's own summary.
+  The default log is now fresh per run; an explicit `--log <path>` keeps the
+  append behaviour (audit retention).
+
+### Changed
+- README license label corrected from MIT to Apache-2.0 (the LICENSE is
+  Apache-2.0); the English badge was also relabelled.
+
 ## [0.2.0] - 2026-08-01
 
 ### Fixed
@@ -41,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **m3 — ship demo**: reproducible `curl-exfil-demo` Skill plus a quickstart so a
   user sees a real block in under five minutes.
 
-[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.1.0
