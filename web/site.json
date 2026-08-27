@@ -52,6 +52,7 @@
    "chips": [
     "› curl 外发被拦",
     "› ~/.ssh 读取被拦",
+    "› ssh/nc/rsync 外联被拦",
     "› 网络出口默认全拒"
    ]
   },
@@ -124,6 +125,6 @@
    "en": "Local engine · open source · Apache-2.0"
   }
  },
- "content_version": "v0.3.0",
- "generated_at": "2026-08-21T07:01:16Z"
+ "content_version": "v0.4.0",
+ "generated_at": "2026-08-27T14:25:20Z"
 }
