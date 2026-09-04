@@ -52,7 +52,8 @@
    "chips": [
     "› curl 外发被拦",
     "› ~/.ssh 读取被拦",
-    "› ssh/nc/rsync 外联被拦",
+    "› head/tail、bash -c 绕过也拦",
+    "› WebSearch 外联也拦",
     "› 网络出口默认全拒"
    ]
   },
@@ -92,12 +93,13 @@
     "en": "A report right after the block"
    },
    "body": {
-    "zh": "每次运行的允许/拦截计数与触发规则，一条 capsule report 拉成表格。",
-    "en": "Allowed-vs-blocked counts and the rule that fired, as one capsule report table."
+    "zh": "每次运行的允许/拦截计数与触发规则，一条 capsule report 拉成表格；加 --json 即可输出机器可读摘要，供 CI 流水线消费。",
+    "en": "Allowed-vs-blocked counts and the rule that fired, as one capsule report table; add --json for a machine-readable summary a CI pipeline can consume."
    },
    "chips": [
     "› allowed vs blocked",
     "› 命中规则可读",
+    "› --json 机器可读",
     "› JSONL 可留存"
    ]
   }
