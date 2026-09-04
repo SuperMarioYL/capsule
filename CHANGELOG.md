@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-05
+
+### Fixed
+- **head/tail/cat -n flag value bypassed the ~/.ssh path deny**: `_parse_bash`
+  grabbed `args[0]` as the file-read path, but a flag's bare value (the `5` in
+  `head -n 5`) survived flag-stripping, so `head -n 5 ~/.ssh/id_rsa` extracted
+  path `5` (matching `./**`, never the `~/.ssh/**` deny) and was ALLOWED under
+  `network-deny.yaml`. The path is now selected via a target selector that
+  prefers a `/`/`~`-bearing token, else the first non-numeric arg.
+- **`bash -c`/`sh -c` wrapper hid a `cat ~/.ssh/id_rsa` read**: `_parse_bash`
+  only inspected the top-level verb, so a shell-interpreter `-c` payload
+  degraded to a bare host-less `shell` call that was ALLOWED under
+  `network-deny.yaml` (shell granted). Capsule now recurses into the `-c`
+  payload of POSIX shell interpreters (bash/sh/zsh/dash/ksh/ash) so a hidden
+  file read is trapped with `path-denied`. (A URL hidden in `-c` was already
+  caught by the raw URL scan.)
+- **host-less `net_fetch` (WebSearch) bypassed the network deny**: a
+  `net_fetch`-class call with no URL (notably `WebSearch`, keyed on `query`)
+  carried no host, so `decide()` consulted no network rule and was ALLOWED
+  under a deny-all-network profile. A `net_fetch` is now fail-closed as
+  network egress by definition — when no host resolves it carries a sentinel
+  so the network rule is always consulted.
+- **version surfaces were left at 0.3.0 through the v0.4.0 tag**: the v0.4.0
+  release commit bumped the git tag but not `VERSION`, `__init__.py`,
+  `pyproject.toml`, `CHANGELOG.md`, or `web/site.json` (`capsule --version`
+  reported 0.3.0 at the v0.4.0 tag). All surfaces are now bumped to 0.5.0 and
+  this [0.4.0] entry back-fills the changelog.
+
+### Added
+- **`capsule report --json`**: emits a machine-readable run summary
+  (`{allowed, blocked, total, log, events:[...]}`) to stdout so a CI pipeline
+  can consume it programmatically (e.g. `jq .blocked`); complements the
+  existing `capsule run` exit-1-on-block convention. An empty/missing log
+  yields a zeroed summary and exit 0.
+
+## [0.4.0] - 2026-08-27
+
+### Fixed
+- **single-label host network bypass**: `ssh`/`nc`/`rsync`/`scp` to a
+  single-label host (`localhost`, an ssh-config alias) reduced to a host-less
+  `shell` call, which `network-deny.yaml` (shell granted, `network.allow: []`)
+  waved through — a real egress bypassing the deny-all-network stance. The
+  `_NET_CMDS` loop now fail-closes (carries the arg as host) so the network
+  rule is consulted.
+- **single-label host allow-list was non-functional**: `_extract_host` required
+  a dotted TLD, so `localhost` returned `None`; the URL-egress fail-closed then
+  carried the raw URL as host, which never matched an `allow: [localhost]`
+  entry — explicitly-allowed local egress (a local LLM/Ollama server) was
+  silently DENIED. Single-label hostnames are now recognised in `_extract_host`.
+- **case-insensitive Skill tool-call bypass**: a lowercase tool verb in a
+  Skill's `capsule-calls` block (`bash`/`webfetch`) was matched
+  case-sensitively and degraded to a bare host-less `shell` call, waving a
+  `curl`/`webfetch` exfil through under a profile that grants `shell`. Tool
+  names are now mapped via a case-insensitive index.
+
 ## [0.3.0] - 2026-08-21
 
 ### Fixed
@@ -61,7 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **m3 — ship demo**: reproducible `curl-exfil-demo` Skill plus a quickstart so a
   user sees a real block in under five minutes.
 
-[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.5.0
+[0.4.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.4.0
 [0.3.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.1.0

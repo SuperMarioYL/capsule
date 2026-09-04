@@ -183,6 +183,54 @@ def _file_url_path(url: str) -> Optional[str]:
     return path or None
 
 
+#: POSIX shell interpreters that take a ``-c <command-string>`` payload. When
+#: the top-level verb is one of these, ``_parse_bash`` recurses on the ``-c``
+#: payload so a hidden ``cat ~/.ssh/id_rsa`` (or a hidden ``curl``) is
+#: inspected rather than buried behind an opaque ``bash -c "..."`` wrapper.
+#: Non-shell ``-c`` runners (``python -c`` etc.) are deliberately excluded:
+#: their payload is arbitrary source code Capsule cannot statically reduce to a
+#: path/host, so recursing would only chase syntax it cannot classify.
+_SHELL_INTERPRETERS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "rbash"}
+#: A short-flag cluster ending in ``c`` — ``-c``, ``-lc``, ``-ic`` — which for a
+#: POSIX shell interpreter introduces the command-string argument. The next
+#: positional token after it is the inner command line.
+_SHELL_C_FLAG_RE = re.compile(r"^-[A-Za-z]*c$")
+
+
+def _shell_c_payload(tokens: list[str]) -> Optional[str]:
+    """Return the command string a shell-interpreter ``-c`` flag carries.
+
+    Returns ``None`` when there is no ``-c`` flag (e.g. an interactive
+    ``bash`` with no script) or when ``-c`` is the last token (no payload) —
+    in both cases there is no inner command to recurse into.
+    """
+    for i, t in enumerate(tokens[1:], start=1):
+        if _SHELL_C_FLAG_RE.match(t) and i + 1 < len(tokens):
+            return tokens[i + 1]
+    return None
+
+
+def _select_read_target(args: list[str]) -> Optional[str]:
+    """Pick the filesystem path a file-read verb targets, fail-closed.
+
+    A dash-prefixed flag's *value* is not itself dash-prefixed (the ``5`` in
+    ``head -n 5``, the ``256`` in ``tail -c 256``), so a naive ``args[0]`` grab
+    selected the flag value as the "path" — letting ``head -n 5 ~/.ssh/id_rsa``
+    slip past a ``~/.ssh/**`` deny (the deny never matched ``5``, and ``5``
+    matched the ``./**`` read allowance). We instead prefer a token that
+    actually looks like a path (carries a ``/`` or a leading ``~``), else the
+    first non-numeric token (skipping a flag's numeric value), else the first
+    positional — preserving today's behaviour for a bare ``cat notes.txt``.
+    """
+    for a in args:
+        if "/" in a or a.startswith("~"):
+            return a
+    for a in args:
+        if not re.fullmatch(r"\d+", a):
+            return a
+    return args[0] if args else None
+
+
 def _parse_bash(command: str) -> CallRequest:
     """Reduce a shell command line to a :class:`CallRequest`, fail-closed.
 
@@ -222,6 +270,24 @@ def _parse_bash(command: str) -> CallRequest:
         return CallRequest(tool="shell", raw=raw)
 
     verb = tokens[0].rsplit("/", 1)[-1].lower()  # strip any leading path
+
+    # A shell-interpreter wrapper (`bash -c "cat ~/.ssh/id_rsa"`) hides a
+    # second-level command the top-level verb/args never see. Recurse on the
+    # -c payload so a hidden file read is inspected by the path logic below (a
+    # hidden URL was already caught by the _URL_RE scan on the full raw above).
+    # The recursive result keeps THIS run's raw so the trap line stays readable.
+    if verb in _SHELL_INTERPRETERS:
+        inner = _shell_c_payload(tokens)
+        if inner is not None:
+            inner_req = _parse_bash(inner)
+            return CallRequest(
+                tool=inner_req.tool,
+                path=inner_req.path,
+                host=inner_req.host,
+                access=inner_req.access,
+                raw=raw,
+            )
+
     args = [t for t in tokens[1:] if not t.startswith("-")]
 
     if verb in _NET_CMDS:
@@ -246,7 +312,13 @@ def _parse_bash(command: str) -> CallRequest:
         return CallRequest(tool="shell", host=fallback_host, raw=raw)
 
     if verb in _FILE_READ_CMDS and args:
-        return CallRequest(tool="shell", path=args[0], access="read", raw=raw)
+        # Pick the real target, not a flag value (head -n 5 ~/.ssh/id_rsa).
+        return CallRequest(
+            tool="shell",
+            path=_select_read_target(args),
+            access="read",
+            raw=raw,
+        )
 
     return CallRequest(tool="shell", raw=raw)
 
@@ -288,13 +360,15 @@ def to_call_request(
     if verb == "net_fetch":
         url = str(data.get("url", "")).strip()
         host = _extract_host(url) if url else None
-        # Fail-closed: a non-empty URL whose host we could not resolve
-        # (file://, a malformed/trailing-dot host, etc.) still consults the
-        # network rule (DENY under a deny-by-default allow-list) rather than
-        # waving through as a host-less net_fetch. Mirrors the m4 fail-closed
-        # in _parse_bash (host = host or url_token).
-        if host is None and url:
-            host = url
+        # A net_fetch-class call is network egress BY DEFINITION, so the network
+        # rule must ALWAYS be consulted — even when no host resolves. Before
+        # v0.5 this fail-closed only fired for a non-empty URL, so a host-less,
+        # path-less net_fetch (notably WebSearch, which carries only a
+        # ``query``) consulted no rule and was ALLOWED under a deny-all-network
+        # profile. Carry the URL when there is one, else the tool name as the
+        # egress sentinel. Mirrors the m4 / file:// fail-closed in _parse_bash.
+        if host is None:
+            host = url or tool_name
         # A file:// URL targets a local path — surface it so a path deny rule
         # (~/.ssh/**) fires with path-denied, and the call never falls through
         # to a bare net_fetch with no host AND no path.
