@@ -240,5 +240,6 @@
   ],
   "footer": {
     "tag": "0.5.0 · Python 3.12+ · Apache-2.0"
-  }
+  },
+  "content_version": "v0.5.0"
 }
