@@ -1,0 +1,30 @@
+{
+  "version": "0.5.0",
+  "scope": "Offline guard_tool_use enforcement against simulated host callbacks under two shipped profiles. Denied callbacks are not invoked; no kernel sandbox, real host connection or external action is exercised.",
+  "inputs": [
+    {
+      "path": "examples/presentation_demo.py",
+      "sha256": "e66dd54761b0c300a174ac8322da410774396d33bffa3d5292f9e2760cdf5431"
+    },
+    {
+      "path": "examples/profiles/network-deny.yaml",
+      "sha256": "9f037bb0a0f90dde156bbda647d767bf1729e66622125adcd4b25470aff9ccf7"
+    },
+    {
+      "path": "examples/profiles/readonly.yaml",
+      "sha256": "d1c04698a8d1f71062506c98b03bcf31efd83eefe86f7c92a26569262e8eacd3"
+    }
+  ],
+  "steps": [
+    {
+      "command": "python examples/presentation_demo.py network-deny",
+      "output": "{\n  \"profile\": \"network-deny\",\n  \"decisions\": [\n    {\n      \"tool\": \"Read\",\n      \"decision\": \"allow\"\n    },\n    {\n      \"tool\": \"Write\",\n      \"decision\": \"deny\",\n      \"rule\": \"path-not-in-profile\"\n    },\n    {\n      \"tool\": \"WebFetch\",\n      \"decision\": \"deny\",\n      \"rule\": \"network-not-in-profile\"\n    }\n  ],\n  \"callbacks_executed\": [\n    \"Read\"\n  ],\n  \"summary\": {\n    \"allowed\": 1,\n    \"blocked\": 2,\n    \"total\": 3\n  }\n}\n",
+      "exit_code": 0
+    },
+    {
+      "command": "python examples/presentation_demo.py readonly",
+      "output": "{\n  \"profile\": \"readonly\",\n  \"decisions\": [\n    {\n      \"tool\": \"Read\",\n      \"decision\": \"allow\"\n    },\n    {\n      \"tool\": \"Write\",\n      \"decision\": \"deny\",\n      \"rule\": \"tool-not-in-profile\"\n    },\n    {\n      \"tool\": \"WebFetch\",\n      \"decision\": \"deny\",\n      \"rule\": \"tool-not-in-profile\"\n    }\n  ],\n  \"callbacks_executed\": [\n    \"Read\"\n  ],\n  \"summary\": {\n    \"allowed\": 1,\n    \"blocked\": 2,\n    \"total\": 3\n  }\n}\n",
+      "exit_code": 0
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "name": "Capsule",
+  "tagline": "Gate tool callbacks with explicit capability profiles.",
+  "architecture": {
+    "title": "Profile checks before the callback",
+    "nodes": [
+      {
+        "title": "Host adapter",
+        "detail": "Tool event to CallRequest"
+      },
+      {
+        "title": "Capability profile",
+        "detail": "Tools, paths and hosts"
+      },
+      {
+        "title": "Policy decision",
+        "detail": "Deny-by-default rules"
+      },
+      {
+        "title": "Interposer",
+        "detail": "Allow callback or raise"
+      },
+      {
+        "title": "Trap log",
+        "detail": "Record decisions"
+      }
+    ],
+    "edges": [
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        3,
+        4
+      ]
+    ]
+  },
+  "process": {
+    "title": "Exercise the actual guard with safe callbacks",
+    "steps": [
+      {
+        "title": "Load profile",
+        "detail": "One of two shipped YAMLs"
+      },
+      {
+        "title": "Attempt three calls",
+        "detail": "Read, Write and WebFetch"
+      },
+      {
+        "title": "Observe callback",
+        "detail": "Only the allowed Read runs"
+      }
+    ],
+    "result": "The guard denies two callbacks before invocation; the host callback itself is simulated."
+  },
+  "integrations": {
+    "title": "Explicit host and policy interfaces",
+    "items": [
+      {
+        "title": "YAML profile",
+        "detail": "Bound skill and capabilities"
+      },
+      {
+        "title": "Claude-style events",
+        "detail": "Read / Write / Bash / WebFetch"
+      },
+      {
+        "title": "guard_tool_use",
+        "detail": "Wrap the host dispatcher"
+      },
+      {
+        "title": "Trap JSONL",
+        "detail": "Persistent decision log"
+      },
+      {
+        "title": "CLI report",
+        "detail": "Text or JSON summary"
+      }
+    ]
+  }
+}

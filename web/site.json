@@ -1,132 +1,244 @@
 {
- "schema": 1,
- "name": "capsule",
- "github": "https://github.com/SuperMarioYL/capsule",
- "host": "capsule.lei6393.com",
- "lang": {
-  "primary": "zh",
-  "toggle": true
- },
- "accent": [
-  "#e6a144",
-  "#c98a3a",
-  "#9c6a2c"
- ],
- "hero": {
-  "eyebrow": {
-   "zh": "调用点拦截 · 拒绝默认 · 本地零依赖",
-   "en": "Call-site enforcement · Deny-by-default · Local, zero-dependency"
+  "schema": 3,
+  "name": "Capsule",
+  "github": "https://github.com/SuperMarioYL/capsule",
+  "host": "capsule.lei6393.com",
+  "palette": "auto",
+  "lang": {
+    "primary": "zh",
+    "toggle": true
   },
-  "headline": {
-   "zh": "装进 Agent 的每个 Skill\n都被拦在越界的那一步",
-   "en": "Every Skill you install\nstops at the call it shouldn't make"
+  "meta": {
+    "visual_profile": "neon-particle",
+    "content_version": "0.5.0",
+    "demo_source": "docs/demo-results.json"
   },
-  "sub": {
-   "zh": "Capsule 在工具调用的那一刻就拦下越界的工具、路径与网络请求——不是装载前的君子协定，也不是事后的审计日志。",
-   "en": "Capsule traps out-of-bound tool, path, and network calls the moment they happen — not a load-time promise, not an after-the-fact audit."
+  "hero": {
+    "eyebrow": {
+      "zh": "在已接入的工具分发点检查能力 profile，拒绝越界回调并记录允许与拒绝的原因。",
+      "en": "Check capability profiles at an integrated tool dispatcher, refuse disallowed callbacks and record allow/deny reasons."
+    },
+    "headline": {
+      "zh": "工具执行之前，\n先检查允许范围",
+      "en": "Before a tool runs,\ncheck its allowed scope."
+    },
+    "sub": {
+      "zh": "在已接入的工具分发点检查能力 profile，拒绝越界回调并记录允许与拒绝的原因。",
+      "en": "Check capability profiles at an integrated tool dispatcher, refuse disallowed callbacks and record allow/deny reasons."
+    },
+    "href": "#quickstart",
+    "cta": {
+      "zh": "运行示例",
+      "en": "Run the example"
+    },
+    "ctaGithub": {
+      "zh": "查看源码",
+      "en": "View source"
+    }
   },
-  "command": "capsule run -p readonly.yaml -- claude",
-  "cta": {
-   "zh": "开始拦截",
-   "en": "Start trapping"
+  "scene": {
+    "kind": "neon-graph",
+    "caption": {
+      "zh": "调用检查 · 显式接入",
+      "en": "CALL CHECKS · EXPLICIT INTEGRATION"
+    },
+    "fallback": "/assets/presentation/scene-dark.svg",
+    "fallbackLight": "/assets/presentation/scene-light.svg"
   },
-  "ctaGithub": {
-   "zh": "GitHub",
-   "en": "GitHub"
+  "advantages": [
+    {
+      "title": {
+        "zh": "执行前判定",
+        "en": "Decide before execution"
+      },
+      "body": {
+        "zh": "拒绝时不会调用底层 callback。",
+        "en": "Denied requests never reach the wrapped callback."
+      }
+    },
+    {
+      "title": {
+        "zh": "规则有归属",
+        "en": "Keep policy explicit"
+      },
+      "body": {
+        "zh": "每个 profile 绑定技能并列出能力范围。",
+        "en": "Each profile binds a skill and lists capabilities."
+      }
+    },
+    {
+      "title": {
+        "zh": "保留触发原因",
+        "en": "Retain decision reasons"
+      },
+      "body": {
+        "zh": "allow/deny 与触发规则进入 trap log。",
+        "en": "allow/deny decisions and rules enter the trap log."
+      }
+    }
+  ],
+  "story": {
+    "intro": {
+      "title": {
+        "zh": "把策略放到工具分发点",
+        "en": "Put policy at the tool dispatcher"
+      },
+      "body": {
+        "zh": "当宿主允许技能调用工具时，声明中的权限范围需要被实际执行路径检查。Capsule 提供宿主 adapter 和 Interposer，让调用方在进入真实工具回调前执行工具、路径和网络规则。安装 Python 包本身不会自动接管所有 Agent。",
+        "en": "A skill’s declared scope needs enforcement in the actual tool path. Capsule supplies a host adapter and Interposer so callers can check tool, path and network rules before entering the underlying callback. Installing the Python package alone does not take over every agent."
+      }
+    },
+    "sections": [
+      {
+        "title": {
+          "zh": "从输入到结果",
+          "en": "From input to result"
+        },
+        "body": {
+          "zh": "真实 guard_tool_use 在 network-deny 与 readonly 两个 profile 下检查三个请求，仅允许 Read 回调运行。它验证回调级拒绝边界，没有连接真实 Agent 或验证系统调用隔离。",
+          "en": "The real guard_tool_use checks three requests under network-deny and readonly profiles, allowing only the Read callback. It validates callback-level refusal, not a live agent integration or syscall isolation."
+        },
+        "image": {
+          "light": "/assets/presentation/process-light.svg",
+          "dark": "/assets/presentation/process-dark.svg",
+          "alt": {
+            "zh": "真实 guard_tool_use 在 network-deny 与 readonly 两个 profile 下检查三个请求，仅允许 Read 回调运行。它验证回调级拒绝边界，没有连接真实 Agent 或验证系统调用隔离。",
+            "en": "The real guard_tool_use checks three requests under network-deny and readonly profiles, allowing only the Read callback. It validates callback-level refusal, not a live agent integration or syscall isolation."
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "工作原理",
+          "en": "How it works"
+        },
+        "body": {
+          "zh": "host adapter 将工具事件转换成 CallRequest；policy.decide 按工具允许集、路径 deny、读写范围和网络 host 依次判定；Interposer 在拒绝时先记录并抛 CapabilityViolation，允许时才调用被包装函数。TrapLog 支持内存或 JSONL，CLI 可查看报告。",
+          "en": "The adapter converts tool events into CallRequest. policy.decide checks allowed tools, path denies, read/write scope and network hosts. Interposer records and raises CapabilityViolation on denial, invoking the wrapped function only on allowance. TrapLog supports memory or JSONL, with CLI reporting."
+        },
+        "image": {
+          "light": "/assets/presentation/architecture-light.svg",
+          "dark": "/assets/presentation/architecture-dark.svg",
+          "alt": {
+            "zh": "host adapter 将工具事件转换成 CallRequest；policy.decide 按工具允许集、路径 deny、读写范围和网络 host 依次判定；Interposer 在拒绝时先记录并抛 CapabilityViolation，允许时才调用被包装函数。TrapLog 支持内存或 JSONL，CLI 可查看报告。",
+            "en": "The adapter converts tool events into CallRequest. policy.decide checks allowed tools, path denies, read/write scope and network hosts. Interposer records and raises CapabilityViolation on denial, invoking the wrapped function only on allowance. TrapLog supports memory or JSONL, with CLI reporting."
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "能力与接入",
+          "en": "Capabilities and integration"
+        },
+        "body": {
+          "zh": "Capsule 的拦截能力来自调用者主动包住 dispatcher，而非透明接管机器。保留原始 trap log 有助于复查，但日志不是所有未插桩动作的完整审计。",
+          "en": "Capsule’s enforcement comes from explicitly wrapping a dispatcher rather than transparently controlling the machine. Trap logs aid review but are not a complete audit of uninstrumented actions."
+        },
+        "image": {
+          "light": "/assets/presentation/integrations-light.svg",
+          "dark": "/assets/presentation/integrations-dark.svg",
+          "alt": {
+            "zh": "Capsule 的拦截能力来自调用者主动包住 dispatcher，而非透明接管机器。保留原始 trap log 有助于复查，但日志不是所有未插桩动作的完整审计。",
+            "en": "Capsule’s enforcement comes from explicitly wrapping a dispatcher rather than transparently controlling the machine. Trap logs aid review but are not a complete audit of uninstrumented actions."
+          }
+        }
+      }
+    ],
+    "details": [
+      {
+        "title": {
+          "zh": "必须接入分发入口",
+          "en": "Dispatcher integration is required"
+        },
+        "body": {
+          "zh": "仅安装 CLI 不会自动保护现有宿主；需要显式包装执行函数。",
+          "en": "Installing the CLI does not automatically protect a host; its execution function must be wrapped."
+        }
+      }
+    ]
   },
-  "scroll": {
-   "zh": "看它能拦什么",
-   "en": "See what it blocks"
+  "demo": {
+    "title": {
+      "zh": "实际运行结果",
+      "en": "Actual demo output"
+    },
+    "note": {
+      "zh": "真实 guard_tool_use 在 network-deny 与 readonly 两个 profile 下检查三个请求，仅允许 Read 回调运行。它验证回调级拒绝边界，没有连接真实 Agent 或验证系统调用隔离。",
+      "en": "The real guard_tool_use checks three requests under network-deny and readonly profiles, allowing only the Read callback. It validates callback-level refusal, not a live agent integration or syscall isolation."
+    },
+    "source": "https://github.com/SuperMarioYL/capsule/blob/main/docs/demo-results.json",
+    "steps": [
+      {
+        "label": {
+          "zh": "网络拒绝 profile",
+          "en": "Network-deny profile"
+        },
+        "body": {
+          "zh": "一个允许回调、两个拒绝，记录具体规则。",
+          "en": "One callback is allowed and two denied, with rule names retained."
+        },
+        "command": "python examples/presentation_demo.py network-deny",
+        "output": "{\n  \"profile\": \"network-deny\",\n  \"decisions\": [\n    {\n      \"tool\": \"Read\",\n      \"decision\": \"allow\"\n    },\n    {\n      \"tool\": \"Write\",\n      \"decision\": \"deny\",\n      \"rule\": \"path-not-in-profile\"\n    },\n    {\n      \"tool\": \"WebFetch\",\n      \"decision\": \"deny\",\n      \"rule\": \"network-not-in-profile\"\n    }\n  ],\n  \"callbacks_executed\": [\n    \"Read\"\n  ],\n  \"summary\": {\n    \"allowed\": 1,\n    \"blocked\": 2,\n    \"total\": 3\n  }\n}\n",
+        "image": "/assets/presentation/demo-0-light.svg",
+        "imageDark": "/assets/presentation/demo-0-dark.svg"
+      },
+      {
+        "label": {
+          "zh": "只读 profile",
+          "en": "Readonly profile"
+        },
+        "body": {
+          "zh": "在更窄工具允许集下重复检查相同请求。",
+          "en": "Check the same requests under the narrower tool allowlist."
+        },
+        "command": "python examples/presentation_demo.py readonly",
+        "output": "{\n  \"profile\": \"readonly\",\n  \"decisions\": [\n    {\n      \"tool\": \"Read\",\n      \"decision\": \"allow\"\n    },\n    {\n      \"tool\": \"Write\",\n      \"decision\": \"deny\",\n      \"rule\": \"tool-not-in-profile\"\n    },\n    {\n      \"tool\": \"WebFetch\",\n      \"decision\": \"deny\",\n      \"rule\": \"tool-not-in-profile\"\n    }\n  ],\n  \"callbacks_executed\": [\n    \"Read\"\n  ],\n  \"summary\": {\n    \"allowed\": 1,\n    \"blocked\": 2,\n    \"total\": 3\n  }\n}\n",
+        "image": "/assets/presentation/demo-1-light.svg",
+        "imageDark": "/assets/presentation/demo-1-dark.svg"
+      }
+    ]
+  },
+  "quickstart": {
+    "title": {
+      "zh": "从完整输入开始",
+      "en": "Start with complete input"
+    },
+    "body": {
+      "zh": "需要 Python 3.12+。下面只调用模拟 host callback，不执行任何文件、shell 或网络动作。",
+      "en": "Requires Python 3.12+. The demo invokes simulated host callbacks and performs no file, shell or network actions."
+    },
+    "steps": [
+      {
+        "title": {
+          "zh": "安装",
+          "en": "Install"
+        },
+        "code": "git clone https://github.com/SuperMarioYL/capsule.git\ncd capsule\npython3 -m venv .venv\nsource .venv/bin/activate\npython -m pip install -e ."
+      },
+      {
+        "title": {
+          "zh": "运行自带示例",
+          "en": "Run the supplied example"
+        },
+        "code": "python examples/presentation_demo.py network-deny\npython examples/presentation_demo.py readonly"
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "zh": "工具级策略不是内核 seccomp、容器或系统级沙箱。",
+      "en": "Tool policy is not kernel seccomp, a container or a system sandbox."
+    },
+    {
+      "zh": "未接入的调用不受控制，shell 意图解析也不是完整 shell 语义。",
+      "en": "Unintegrated calls are uncontrolled, and shell-intent parsing is not complete shell semantics."
+    },
+    {
+      "zh": "本次只验证模拟 callback 的执行边界。",
+      "en": "This run validates only the simulated callback boundary."
+    }
+  ],
+  "footer": {
+    "tag": "0.5.0 · Python 3.12+ · Apache-2.0"
   }
- },
- "advantages": [
-  {
-   "title": {
-    "zh": "在调用点当场拦下，不是事后记账",
-    "en": "Blocked at the call site, not after the fact"
-   },
-   "body": {
-    "zh": "技能试图 curl 外发、读取 ~/.ssh，Capsule 在那一刻拒绝并打印 DENIED——越界的调用根本不会执行。",
-    "en": "A skill tries to curl out or read ~/.ssh; Capsule refuses it on the spot with a DENIED line — the call never runs."
-   },
-   "chips": [
-    "› curl 外发被拦",
-    "› ~/.ssh 读取被拦",
-    "› head/tail、bash -c 绕过也拦",
-    "› WebSearch 外联也拦",
-    "› 网络出口默认全拒"
-   ]
-  },
-  {
-   "title": {
-    "zh": "一份声明式 profile 决定能碰什么",
-    "en": "One declarative profile decides what it may touch"
-   },
-   "body": {
-    "zh": "用一份 YAML 声明工具、路径读写与网络出口；不在声明里的，一律拒绝。",
-    "en": "Declare tools, path read/write, and network egress in one YAML — anything not declared is denied."
-   },
-   "chips": [
-    "› deny-by-default",
-    "› 路径读写分离",
-    "› 网络白名单"
-   ]
-  },
-  {
-   "title": {
-    "zh": "一条命令复现真实拦截",
-    "en": "Reproduce a real block in one command"
-   },
-   "body": {
-    "zh": "自带的恶意 demo Skill 会尝试外发与读密钥；用 deny-by-default profile 跑一遍，五分钟内看到第一次拦截。",
-    "en": "A deliberately malicious demo skill tries to exfiltrate and read keys; run it under a deny-by-default profile and see your first block in under five minutes."
-   },
-   "chips": [
-    "› capsule init",
-    "› capsule run --skill",
-    "› capsule report"
-   ]
-  },
-  {
-   "title": {
-    "zh": "拦截后立刻出报告",
-    "en": "A report right after the block"
-   },
-   "body": {
-    "zh": "每次运行的允许/拦截计数与触发规则，一条 capsule report 拉成表格；加 --json 即可输出机器可读摘要，供 CI 流水线消费。",
-    "en": "Allowed-vs-blocked counts and the rule that fired, as one capsule report table; add --json for a machine-readable summary a CI pipeline can consume."
-   },
-   "chips": [
-    "› allowed vs blocked",
-    "› 命中规则可读",
-    "› --json 机器可读",
-    "› JSONL 可留存"
-   ]
-  }
- ],
- "scene": {
-  "kind": "particle-field"
- },
- "cta": {
-  "headline": {
-   "zh": "把不信任的 Skill 关进沙箱，再放出来跑",
-   "en": "Sandbox the skills you don't trust, then let them run"
-  },
-  "sub": {
-   "zh": "deny-by-default，本地引擎，开源。",
-   "en": "deny-by-default, local engine, open source."
-  },
-  "button": {
-   "zh": "查看 GitHub",
-   "en": "View on GitHub"
-  }
- },
- "footer": {
-  "tag": {
-   "zh": "本地引擎 · 开源 · Apache-2.0",
-   "en": "Local engine · open source · Apache-2.0"
-  }
- },
- "content_version": "v0.5.0",
- "generated_at": "2026-09-05T02:30:00+08:00"
 }
