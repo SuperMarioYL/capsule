@@ -104,6 +104,10 @@
           "alt": {
             "zh": "真实 guard_tool_use 在 network-deny 与 readonly 两个 profile 下检查三个请求，仅允许 Read 回调运行。它验证回调级拒绝边界，没有连接真实 Agent 或验证系统调用隔离。",
             "en": "The real guard_tool_use checks three requests under network-deny and readonly profiles, allowing only the Read callback. It validates callback-level refusal, not a live agent integration or syscall isolation."
+          },
+          "mobile": {
+            "light": "/assets/presentation/process-mobile-light.svg",
+            "dark": "/assets/presentation/process-mobile-dark.svg"
           }
         }
       },
@@ -122,6 +126,10 @@
           "alt": {
             "zh": "host adapter 将工具事件转换成 CallRequest；policy.decide 按工具允许集、路径 deny、读写范围和网络 host 依次判定；Interposer 在拒绝时先记录并抛 CapabilityViolation，允许时才调用被包装函数。TrapLog 支持内存或 JSONL，CLI 可查看报告。",
             "en": "The adapter converts tool events into CallRequest. policy.decide checks allowed tools, path denies, read/write scope and network hosts. Interposer records and raises CapabilityViolation on denial, invoking the wrapped function only on allowance. TrapLog supports memory or JSONL, with CLI reporting."
+          },
+          "mobile": {
+            "light": "/assets/presentation/architecture-mobile-light.svg",
+            "dark": "/assets/presentation/architecture-mobile-dark.svg"
           }
         }
       },
@@ -140,6 +148,10 @@
           "alt": {
             "zh": "Capsule 的拦截能力来自调用者主动包住 dispatcher，而非透明接管机器。保留原始 trap log 有助于复查，但日志不是所有未插桩动作的完整审计。",
             "en": "Capsule’s enforcement comes from explicitly wrapping a dispatcher rather than transparently controlling the machine. Trap logs aid review but are not a complete audit of uninstrumented actions."
+          },
+          "mobile": {
+            "light": "/assets/presentation/integrations-mobile-light.svg",
+            "dark": "/assets/presentation/integrations-mobile-dark.svg"
           }
         }
       }
