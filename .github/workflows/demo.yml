@@ -17,26 +17,27 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
-      # Render with a directly-installed vhs (the vhs-action@v2 wrapper ran the
-      # tape in its own context, so assets/demo.gif never landed in the repo
-      # and the commit step failed on every tag since v0.1.0). Pinned version,
-      # matching the working demo pattern elsewhere in this portfolio.
-      - name: Install vhs + deps (ffmpeg, ttyd, vhs 0.12.0)
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      # Render with a go-installed vhs (github.com/charmbracelet/vhs@latest,
+      # built from main). Both vhs-action@v2 and the v0.12.0 release tarball
+      # "rendered" the tape but produced no gif anywhere in the tree on
+      # ubuntu-24.04 — a silent failure on every tag since v0.1.0; the
+      # go-install build is the recipe the green demo workflows in this
+      # portfolio use.
+      - name: Install vhs + deps (ffmpeg, ttyd, vhs)
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           sudo curl -fsSL -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64
           sudo chmod +x /usr/local/bin/ttyd
-          curl -fsSL -o /tmp/vhs.tgz https://github.com/charmbracelet/vhs/releases/download/v0.12.0/vhs_0.12.0_Linux_x86_64.tar.gz
-          sudo tar -xzf /tmp/vhs.tgz -C /tmp --strip-components=1 vhs_0.12.0_Linux_x86_64/vhs && sudo mv /tmp/vhs /usr/local/bin/vhs
-          sudo chmod +x /usr/local/bin/vhs
+          go install github.com/charmbracelet/vhs@latest
       - name: Render demo.gif
         run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
           vhs docs/demo.tape
-          echo "--- gif locations after render:"
-          find . -name "*.gif" -not -path "./.git/*" || true
-          ls -la assets/ || true
       - name: Commit rendered gif
         run: |
           git config user.name  "${{ github.actor }}"
