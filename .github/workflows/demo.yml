@@ -32,7 +32,11 @@ jobs:
           sudo tar -xzf /tmp/vhs.tgz -C /tmp --strip-components=1 vhs_0.12.0_Linux_x86_64/vhs && sudo mv /tmp/vhs /usr/local/bin/vhs
           sudo chmod +x /usr/local/bin/vhs
       - name: Render demo.gif
-        run: vhs docs/demo.tape
+        run: |
+          vhs docs/demo.tape
+          echo "--- gif locations after render:"
+          find . -name "*.gif" -not -path "./.git/*" || true
+          ls -la assets/ || true
       - name: Commit rendered gif
         run: |
           git config user.name  "${{ github.actor }}"
