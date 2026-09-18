@@ -42,6 +42,17 @@ jobs:
         run: |
           git config user.name  "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
+          # The current ubuntu-24.04 runner images silently produce no gif from
+          # vhs (zero-frame capture: "Creating ..." completes in milliseconds
+          # with no file and no error) across every recipe tried — vhs-action,
+          # the release tarball, and go-install @latest. Degrade honestly
+          # instead of failing the tag: when no gif was rendered, say so and
+          # stay green; when the environment renders again, the commit+push
+          # path resumes.
+          if [ ! -f assets/demo.gif ]; then
+            echo "demo: vhs produced no gif on this runner image — skipping the gif commit"
+            exit 0
+          fi
           git add assets/demo.gif
           git commit -m "chore: render demo gif" || { echo "no change"; exit 0; }
           # The checkout is at the tag (detached HEAD); main may have moved past
