@@ -9,7 +9,7 @@
 # this tape, so `capsule` is on PATH and the examples/ paths resolve. We type the
 # install line for the viewer's benefit but it is a no-op fast re-install.
 
-Output assets/demo.gif
+Output ../assets/demo.gif
 
 Set Shell "bash"
 Set FontSize 17
