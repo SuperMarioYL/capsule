@@ -196,6 +196,30 @@ _SHELL_INTERPRETERS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "rbash"}
 #: positional token after it is the inner command line.
 _SHELL_C_FLAG_RE = re.compile(r"^-[A-Za-z]*c$")
 
+#: Shell command separators that end one command and start another inside a
+#: single Bash call. Every segment of a compound command is an independently
+#: executed command, so each one is parsed and the strictest surface (any
+#: segment's path or host) is carried into the CallRequest — otherwise only
+#: the FIRST segment was inspected and ``true && cat ~/.ssh/id_rsa`` or
+#: ``echo 'cat ...' | bash`` reached the interpreter with no path attached.
+_SEGMENT_SEPS = {"|", ";", "&&", "||"}
+
+#: Output-redirection tokens — ``>``, ``>>``, and their fd-prefixed forms
+#: (``2>``, ``&>``, ``1>>``). The token AFTER one is a file WRITE target and
+#: must surface as an ``access="write"`` path so the profile's write scope
+#: (e.g. ``./out/**``) applies to shell redirects, not just to edit_file.
+_REDIRECT_RE = re.compile(r"^(?:\d+|&)?>>?$")
+
+#: Verbs whose first positional argument is a file write target.
+_FILE_WRITE_CMDS = {"tee"}
+
+#: A path-like substring (``~``-rooted, ``/``-rooted, or explicit ``./`` /
+#: ``../``) inside raw command text. Used for the pipe-into-interpreter shape
+#: (``echo 'cat ~/.ssh/id_rsa' | bash``), where the interpreter's script is the
+#: PRECEDING segment's output and the path hides inside a quoted argument that
+#: token-level parsing cannot see — the same reason _URL_RE scans raw text.
+_PATHLIKE_RE = re.compile(r"(?:~/|\.{1,2}/|/)(?:[\w.-]+/)*[\w.-]+")
+
 
 def _shell_c_payload(tokens: list[str]) -> Optional[str]:
     """Return the command string a shell-interpreter ``-c`` flag carries.
@@ -269,23 +293,91 @@ def _parse_bash(command: str) -> CallRequest:
     if not tokens:
         return CallRequest(tool="shell", raw=raw)
 
+    # A compound command runs EVERY segment (``true && cat x``, ``echo y | bash``,
+    # ``a; b``), so every segment is parsed and the strictest surface wins: the
+    # first host found (a network rule must fire) and the first read then write
+    # path found (a path deny / write-scope rule must fire). Pre-v0.6 only the
+    # first segment's verb was inspected, so a leading ``true &&`` or a pipe
+    # into an interpreter hid the rest of the line from the path/network logic.
+    segments: list[list[str]] = [[]]
+    for t in tokens:
+        if t in _SEGMENT_SEPS:
+            segments.append([])
+        else:
+            segments[-1].append(t)
+
+    first_host: Optional[str] = None
+    first_read: Optional[str] = None
+    first_write: Optional[str] = None
+
+    consumed = 0  # tokens of earlier segments, for the pipe-script shape
+    for seg in segments:
+        if not seg:
+            continue
+        req = _parse_segment(seg, raw)
+        if req is not None:
+            if req.host is not None and first_host is None:
+                first_host = req.host
+            if req.path is not None and req.access == "read" and first_read is None:
+                first_read = req.path
+            if req.path is not None and req.access == "write" and first_write is None:
+                first_write = req.path
+
+        # ``X | bash`` (no ``-c``): the interpreter's SCRIPT is the preceding
+        # segment's output, so a path hiding inside a quoted argument of X
+        # (``echo 'cat ~/.ssh/id_rsa' | bash``) is reachable script text.
+        # Token-level parsing cannot see inside the quoted arg — scan the
+        # preceding raw text for the first path-like substring, mirroring how
+        # _URL_RE already scans raw text for hidden URLs.
+        verb = seg[0].rsplit("/", 1)[-1].lower()
+        if (
+            consumed > 0
+            and verb in _SHELL_INTERPRETERS
+            and _shell_c_payload(seg) is None
+            and first_read is None
+        ):
+            preceding = " ".join(
+                t for seg2 in segments for t in seg2 if seg2 is not seg
+            )
+            if (m := _PATHLIKE_RE.search(preceding)) and first_host is None:
+                first_read = m.group(0)
+
+        consumed += len(seg)
+
+    if first_host is not None:
+        return CallRequest(tool="shell", host=first_host, raw=raw)
+    if first_read is not None:
+        return CallRequest(tool="shell", path=first_read, access="read", raw=raw)
+    if first_write is not None:
+        return CallRequest(tool="shell", path=first_write, access="write", raw=raw)
+    return CallRequest(tool="shell", raw=raw)
+
+
+def _parse_segment(tokens: list[str], raw: str) -> Optional[CallRequest]:
+    """Parse ONE command segment (no separators) into a CallRequest, or None.
+
+    Applies the same verb classification the pre-v0.6 whole-line parser used —
+    interpreter ``-c`` recursion, network commands, file-read commands — plus
+    the redirect/``tee`` write shapes, so a write target or a hidden read in a
+    later segment is no longer invisible.
+    """
     verb = tokens[0].rsplit("/", 1)[-1].lower()  # strip any leading path
 
     # A shell-interpreter wrapper (`bash -c "cat ~/.ssh/id_rsa"`) hides a
     # second-level command the top-level verb/args never see. Recurse on the
     # -c payload so a hidden file read is inspected by the path logic below (a
     # hidden URL was already caught by the _URL_RE scan on the full raw above).
-    # The recursive result keeps THIS run's raw so the trap line stays readable.
     if verb in _SHELL_INTERPRETERS:
         inner = _shell_c_payload(tokens)
         if inner is not None:
-            inner_req = _parse_bash(inner)
+            return _parse_bash(inner)
+
+    # An output redirect (``echo x > ~/.bashrc``) writes the NEXT token's path
+    # — surface it as a write so the profile's write scope applies.
+    for i, t in enumerate(tokens[:-1]):
+        if _REDIRECT_RE.match(t):
             return CallRequest(
-                tool=inner_req.tool,
-                path=inner_req.path,
-                host=inner_req.host,
-                access=inner_req.access,
-                raw=raw,
+                tool="shell", path=tokens[i + 1], access="write", raw=raw
             )
 
     args = [t for t in tokens[1:] if not t.startswith("-")]
@@ -302,12 +394,8 @@ def _parse_bash(command: str) -> CallRequest:
             if file_path is not None:
                 return CallRequest(tool="shell", path=file_path, access="read", raw=raw)
         # A network command whose args yield no resolvable host/path is still
-        # network egress — fail-closed like the URL branch above: carry the
-        # first non-flag arg (or the raw command) as the host so the network
-        # rule is consulted. Before v0.4 this returned a bare host-less shell
-        # call, which `ssh localhost` / `nc localhost 4444` /
-        # `rsync data buildbox:/tmp/` exploited to bypass a deny-by-default
-        # network profile (shell granted, no host => no network rule => ALLOWED).
+        # network egress — fail-closed: carry the first non-flag arg (or the
+        # raw command) as the host so the network rule is consulted.
         fallback_host = args[0] if args else raw
         return CallRequest(tool="shell", host=fallback_host, raw=raw)
 
@@ -320,7 +408,15 @@ def _parse_bash(command: str) -> CallRequest:
             raw=raw,
         )
 
-    return CallRequest(tool="shell", raw=raw)
+    if verb in _FILE_WRITE_CMDS and args:
+        return CallRequest(
+            tool="shell",
+            path=_select_read_target(args),
+            access="write",
+            raw=raw,
+        )
+
+    return None
 
 
 def to_call_request(

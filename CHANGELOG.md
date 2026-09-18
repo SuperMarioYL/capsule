@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-19
+
+Bypass-hunt release: four same-class escapes of the v0.5.0 fixes, all
+reproduced under the headline `network-deny.yaml` profile (shell granted)
+before being fixed. Every shape was ALLOWED at v0.5.0.
+
+### Fixed
+
+- **Pipe into an interpreter hid the script's target**
+  (`echo 'cat ~/.ssh/id_rsa' | bash`). The v0.5.0 fix recursed into
+  `bash -c` payloads, but `X | bash` reaches the interpreter with its script
+  on stdin — the path hides inside a quoted argument of `X` that token-level
+  parsing cannot see. The pipe-into-interpreter shape now scans the preceding
+  segments' text for the first path-like substring (mirroring how the raw URL
+  scan already catches `echo 'curl …' | sh`), so the read is trapped with
+  `path-denied`.
+
+- **Compound commands inspected only the first segment**
+  (`true && cat ~/.ssh/id_rsa`, `a; b`, `x || y`). A separator-ended prefix
+  (`true &&`) completely hid the rest of the line from the verb classifier.
+  `_parse_bash` now splits on `|`, `;`, `&&`, `||` (shlex keeps quoted
+  separators inside a token, so `echo 'a|b'` is not split) and parses EVERY
+  segment, carrying the strictest surface: any segment's host, then any
+  segment's read path, then any write path.
+
+- **Shell output redirects bypassed the write scope** (`echo x > ~/.bashrc`).
+  A `>` / `>>` (and `2>` / `&>` forms) redirect target is a file WRITE, but
+  no write path was ever surfaced from shell commands, so writes stayed
+  outside the profile's `paths.write` scope (`./out/**`). Redirect targets
+  now surface as `access="write"` paths — in-scope writes (`> ./out/f.txt`)
+  stay allowed.
+
+- **`tee` wrote outside the scope unimpeded** (`tee ~/.bashrc`). Same class:
+  a write verb whose target was never inspected; `tee`'s positional target
+  now surfaces as a write path.
+
+### Testing
+
+8 new regression tests (`tests/test_cli.py`), each red on the v0.5.0 tree:
+the four bypass shapes assert their specific deny rule (`path-denied` /
+`network-not-in-profile` / `path-not-in-profile`), and four benign shapes
+(in-scope redirect, in-scope pipe-to-tee, quoted pipe, plain read) assert no
+over-blocking. 87 → 95 tests.
+
 ## [0.5.0] - 2026-09-05
 
 ### Fixed
