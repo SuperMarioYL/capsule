@@ -9,7 +9,7 @@
 
 **在已接入的工具分发点检查能力 profile，拒绝越界回调并记录允许与拒绝的原因。**
 
-`v0.5.0` · `Python 3.12+` · [Apache-2.0](LICENSE)
+`v0.7.0` · `Python 3.12+` · [Apache-2.0](LICENSE)
 
 [Website](https://capsule.lei6393.com) · [Demo record](docs/demo-results.json)
 

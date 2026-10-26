@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.7.0",
   "scope": "Offline guard_tool_use enforcement against simulated host callbacks under two shipped profiles. Denied callbacks are not invoked; no kernel sandbox, real host connection or external action is exercised.",
   "inputs": [
     {

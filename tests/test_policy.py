@@ -182,3 +182,47 @@ def test_relative_call_path_matches_profile_base_dir(tmp_path, monkeypatch):
     d = decide(prof, call)
     assert d.allowed
     assert d.rule == "allowed"
+
+
+# --------------------------------------------------------------------------- #
+# fix-shell-multi-surface-request — a call that touches several surfaces is
+# allowed only if EVERY one of them is permitted
+# --------------------------------------------------------------------------- #
+def test_decide_denies_when_an_extra_surface_is_denied(tmp_path):
+    # One request, two surfaces: the primary (an allow-listed egress host) is
+    # fine, but the call also reads a denied path. Judging the primary alone —
+    # what pre-v0.7 did — allowed the whole call.
+    prof = make_profile(tmp_path)
+    call = CallRequest(
+        tool="read_file",
+        host="api.github.com",  # in network.allow
+        extra=(CallRequest(tool="read_file", path="~/.ssh/id_rsa"),),
+    )
+    d = decide(prof, call)
+    assert d.denied
+    assert d.rule == "path-denied"
+
+
+def test_decide_denies_when_the_primary_surface_is_denied(tmp_path):
+    prof = make_profile(tmp_path)
+    call = CallRequest(
+        tool="read_file",
+        path="~/.ssh/id_rsa",
+        extra=(CallRequest(tool="read_file", host="api.github.com"),),
+    )
+    d = decide(prof, call)
+    assert d.denied
+    assert d.rule == "path-denied"
+
+
+def test_decide_allows_when_every_surface_is_permitted(tmp_path):
+    prof = make_profile(tmp_path)
+    inside = tmp_path / "notes.txt"
+    call = CallRequest(
+        tool="read_file",
+        path=str(inside),
+        extra=(CallRequest(tool="read_file", host="api.github.com"),),
+    )
+    d = decide(prof, call)
+    assert d.allowed
+    assert d.rule == "allowed"

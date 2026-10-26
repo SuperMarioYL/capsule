@@ -81,6 +81,14 @@ class CallRequest:
     skill:
         The Skill that issued the call, for trap attribution. May be ``None``
         when unknown; the active profile's ``skill`` is used as a fallback.
+    extra:
+        Additional surfaces the SAME call touches, each a :class:`CallRequest`
+        of its own. One request names at most one ``path``, but a single shell
+        command can touch several capabilities at once — it can read one file
+        and redirect into another (``cat ~/.ssh/id_rsa > ./out/x``), or reach a
+        host and write a file (``curl 1.2.3.4/x > ./out/f``). Every extra
+        surface must be permitted for the call to be allowed; a host adapter
+        puts the strictest surface in the request proper and the rest here.
     """
 
     tool: str
@@ -89,6 +97,7 @@ class CallRequest:
     access: str = "read"
     raw: Optional[str] = None
     skill: Optional[str] = None
+    extra: tuple["CallRequest", ...] = ()
 
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +251,23 @@ def decide(profile: Profile, call: CallRequest) -> Decision:
     """Decide whether ``call`` is permitted under ``profile``. Deny-by-default.
 
     The first denial wins; a call is only allowed if it survives every check.
+    A call that touches several surfaces (:attr:`CallRequest.extra`) is allowed
+    only if EVERY one of them is permitted — a shell command that both reads a
+    denied file and writes an in-scope redirect is denied, whichever surface
+    the adapter happened to carry as the primary one.
     """
+    decision = _decide_surface(profile, call)
+    if decision.denied:
+        return decision
+    for surface in call.extra:
+        extra_decision = _decide_surface(profile, surface)
+        if extra_decision.denied:
+            return extra_decision
+    return decision
+
+
+def _decide_surface(profile: Profile, call: CallRequest) -> Decision:
+    """Decide ONE surface of a call (its tool verb, path, and host)."""
     # 1) Tool verb must be explicitly allowed.
     if not profile.allows_tool(call.tool):
         return Decision(

